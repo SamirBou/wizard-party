@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0816">
+<title>Wizard Party</title>
+<style>
+  :root { --bg:#0b0816; --panel:#1c1630; --fg:#f3ecff; --dim:#a99cc7; --gold:#ffcf4a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px system-ui,sans-serif; overflow:hidden; }
+  #game { display:block; position:fixed; inset:0; touch-action:none; }
+  .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#0b0816ee; z-index:5; padding:16px; }
+  .card { background:var(--panel); padding:24px 28px; border-radius:14px; width:min(620px,100%); max-height:94vh; overflow:auto; box-shadow:0 10px 40px #000a; }
+  h1 { margin:0 0 4px; font-size:40px; color:var(--gold); }
+  .card p { color:var(--dim); margin:4px 0 14px; }
+  .row { display:flex; gap:8px; margin:6px 0; }
+  input, select { padding:9px 10px; border-radius:8px; border:1px solid #3a2f5c; background:#120e22; color:var(--fg); font-size:15px; }
+  .row input { flex:1; }
+  button { padding:10px 16px; border:0; border-radius:9px; background:var(--gold); color:#221a00; font-weight:700; font-size:15px; cursor:pointer; }
+  button.ghost { background:#2c2448; color:var(--fg); font-weight:500; }
+  #hud { position:fixed; left:0; right:0; bottom:0; padding:8px 12px 10px; background:#120e22f0; border-top:1px solid #2c2448; z-index:3; }
+  #hudtop { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #turn { font-weight:800; font-size:18px; min-width:120px; }
+  #schools { display:flex; gap:4px; flex-wrap:wrap; }
+  .tab { padding:5px 9px; border-radius:7px; cursor:pointer; text-transform:capitalize; font-size:13px; border:2px solid transparent; color:var(--c); background:#1f1838; }
+  .tab.on { border-color:var(--c); background:#2c2448; }
+  #spells { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
+  .spell { padding:6px 10px; border-radius:8px; background:#2c2448; cursor:pointer; font-size:14px; border:2px solid transparent; display:flex; flex-direction:column; }
+  .spell.on { border-color:var(--gold); background:#3b2f63; }
+  .spell .aim { font-size:11px; color:var(--dim); }
+  #desc { color:var(--dim); font-size:13px; margin-top:6px; min-height:16px; }
+  #help { color:var(--dim); font-size:12px; margin-left:auto; text-align:right; }
+  #toast { position:fixed; top:56px; left:50%; transform:translateX(-50%); background:#000c; padding:10px 18px; border-radius:10px; z-index:4; font-size:20px; opacity:0; transition:opacity .3s; text-align:center; max-width:92vw; pointer-events:none; }
+  #toast small { font-size:15px; color:#ffd9f0; }
+  #toast.show { opacity:1; }
+  .pv { width:40px; height:40px; border-radius:50%; object-fit:cover; object-position:50% 20%; flex:none; }
+  .frow { display:flex; gap:6px; align-items:center; margin:4px 0; }
+  .frow .dot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .frow .fn { width:38%; } .frow .fj { flex:1; }
+  /* rooms: host panel, phone join screen */
+  #roomInfo { margin-top:12px; padding:12px; border-radius:10px; background:#120e22; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  #roomInfo .code { font-size:34px; font-weight:800; letter-spacing:6px; color:var(--gold); }
+  #roomInfo .link { font-size:12px; color:var(--dim); word-break:break-all; }
+  #qr { background:#fff; padding:6px; border-radius:6px; line-height:0; }
+  #qr:empty { display:none; }
+  .st { font-size:13px; color:var(--dim); } .st[data-state=online] { color:#6bff9a; } .st[data-state=offline] { color:#ff6b6b; }
+  #names .row.claimed .pv { outline:3px solid #6bff9a; border-radius:8px; }
+  #names .row.claimed input { border-color:#6bff9a; }
+  #joinList { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:8px; margin:12px 0; }
+  .jrow { display:flex; flex-direction:column; align-items:center; gap:2px; background:#2c2448; color:var(--fg); font-weight:700; padding:8px; border:2px solid transparent; touch-action:manipulation; }
+  .jrow img { height:72px; } .jrow em { font-style:normal; font-weight:400; font-size:12px; color:var(--dim); }
+  .jrow.mine { border-color:#6bff9a; } .jrow.mine em { color:#6bff9a; } .jrow.taken { opacity:.45; }
+  /* phone controls: shown on touch screens during your own turn */
+  #zoomBtn { position:fixed; top:8px; right:8px; z-index:4; width:44px; height:44px; padding:0; border-radius:50%; background:#2c2448d0; color:var(--fg); font-size:20px; }
+  #touch { position:fixed; left:0; right:0; z-index:4; display:none; justify-content:space-between; align-items:flex-end; padding:0 10px; pointer-events:none; }
+  #touch .grp { display:flex; gap:8px; pointer-events:auto; }
+  #touch button { width:62px; height:62px; border-radius:50%; font-size:22px; padding:0; background:#2c2448e6; color:var(--fg); border:2px solid #4a3d7a; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #touch #tCast { width:84px; height:84px; background:var(--gold); color:#221a00; font-size:17px; border-color:#ffe08a; }
+  #touch #tEnd { font-size:12px; }
+  body.coarse.myturn #touch { display:flex; }
+  body.guest:not(.myturn) #spells, body.guest:not(.myturn) #schools, body.guest:not(.myturn) #desc { display:none; }
+  #waitNote { display:none; color:var(--dim); font-size:14px; }
+  body.guest:not(.myturn) #waitNote { display:block; }
+  @media (max-height: 520px), (max-width: 700px) {
+    #help { display:none; }
+    #hud { padding:4px 8px 6px; }
+    #turn { font-size:15px; min-width:0; } #turn img { height:34px !important; }
+    #spells { flex-wrap:nowrap; overflow-x:auto; margin-top:4px; -webkit-overflow-scrolling:touch; }
+    .spell { flex:none; padding:4px 8px; font-size:13px; }
+    .tab { padding:3px 7px; font-size:12px; }
+    #desc { display:none; }
+    h1 { font-size:30px; }
+    .card { padding:16px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="toast"></div>
+<button id="zoomBtn" aria-label="Zoom">🔍</button>
+<div id="touch">
+  <div class="grp"><button id="tLeft" aria-label="Walk left">◀</button><button id="tRight" aria-label="Walk right">▶</button><button id="tJump" aria-label="Jump">⤴</button></div>
+  <div class="grp"><button id="tEnd" aria-label="End turn">END</button><button id="tCast" aria-label="Cast">CAST</button></div>
+</div>
+<div id="hud">
+  <div id="hudtop">
+    <div id="turn"></div>
+    <div id="schools"></div>
+    <div id="help">mouse: aim · hold click to charge · click to target<br>keys: ← → walk · ↑ ↓ aim · SPACE cast/charge · ENTER jump · Q/E school · 1-9 spell · TAB end turn</div>
+  </div>
+  <div id="waitNote">Watch the battle. Your controls appear on your turn.</div>
+  <div id="spells"></div>
+  <div id="desc"></div>
+</div>
+
+<div class="overlay" id="setup">
+  <div class="card">
+    <h1>Wizard Party</h1>
+    <p>A shared-screen wizard war. Add 2 to 8 wizards, pass the mouse each turn, last wizard standing wins.</p>
+    <div id="names"></div>
+    <div class="row" style="margin-top:12px;align-items:center">
+      <button class="ghost" id="add">+ wizard</button>
+      <select id="map"><option value="hills">Rolling hills</option><option value="islands">Islands</option></select>
+      <button class="ghost" id="forgeBtn">Spell Forge</button>
+      <button id="start" style="margin-left:auto">Start the war</button>
+    </div>
+    <div class="row" style="margin-top:10px;align-items:center;flex-wrap:wrap">
+      <button class="ghost" id="hostBtn">Play on phones: open a room</button>
+      <input id="joinCode" placeholder="Room code" maxlength="4" style="width:110px;text-transform:uppercase" autocomplete="off">
+      <button class="ghost" id="joinBtn">Join</button>
+    </div>
+    <div id="roomInfo" hidden>
+      <div id="qr"></div>
+      <div style="flex:1;min-width:0">
+        <div class="code"></div>
+        <div class="link"></div>
+        <div class="st">Connecting...</div>
+        <p style="margin:6px 0 0">Everyone scans the code or opens the link, then taps their wizard. Rows turn green when a phone claims them. Wizards nobody claims are played on this screen.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="forge" style="display:none">
+  <div class="card">
+    <h1 style="font-size:28px">Spell Forge</h1>
+    <p>Rename any spell and give it a joke line, shown on screen whenever someone casts it. The Party spells at the bottom are made for inside jokes. Saved in this browser.</p>
+    <div id="forgeList"></div>
+    <div class="row" style="margin-top:12px"><button class="ghost" id="forgeClose">Cancel</button><button id="forgeSave" style="margin-left:auto">Save spell book</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="join" style="display:none">
+  <div class="card" id="joinBox">
+    <h1 style="font-size:30px">Wizard Party <span id="joinRoom" style="color:var(--fg);letter-spacing:3px"></span></h1>
+    <p id="joinHint">Connecting to the room...</p>
+    <div id="joinList"></div>
+    <div class="st">Connecting...</div>
+  </div>
+</div>
+
+<div class="overlay" id="winner" style="display:none">
+  <div class="card" style="text-align:center">
+    <h1 id="wtext"></h1>
+    <p>Last wizard standing.</p>
+    <button id="again">Play again</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>if (matchMedia("(pointer: coarse)").matches) document.body.classList.add("coarse");</script>
+<script src="net.js"></script>
+<script src="spells.js"></script>
+<script src="roster.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
