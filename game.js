@@ -709,6 +709,6 @@
   const qRoom = (new URLSearchParams(location.search).get("room") || "").toUpperCase();
   if (/^[A-Z]{4}$/.test(qRoom)) joinRoom(qRoom);
   let lastCast = "";
-  window.__wp = { get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = BOOK.find(s => s.id === id); school = spell.school; renderHud(); }, ids: BOOK.map(s => s.id) };   // test hook
+  window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = BOOK.find(s => s.id === id); school = spell.school; renderHud(); }, ids: BOOK.map(s => s.id) };   // test hook
   makeTerrain("hills"); loop();
 })();
