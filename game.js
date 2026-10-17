@@ -124,6 +124,15 @@
   const LOOKS = (typeof ROSTER !== "undefined" ? ROSTER : []);
   const atlas = {}; for (const p of LOOKS) { const im = new Image(); im.src = "sprites/" + p.id + ".png"; atlas[p.id] = im; }
   const icon = id => "sprites/" + id + "_icon.png";
+  const FUN = LOOKS.filter(p => p.fun), FRIENDS = LOOKS.filter(p => !p.fun);   // 2026-10-16: the funny party guests come after the 9 friends
+  // a look for a new row: the friend whose name it is, else a free look (funny ones first for phones that join), else the least-used funny one
+  function pickLook(v, used, funnyFirst) {
+    const byName = LOOKS.find(p => v && p.name.toLowerCase() === String(v).toLowerCase()); if (byName) return byName.id;
+    const free = (funnyFirst ? FUN.concat(FRIENDS) : LOOKS).find(p => !used.includes(p.id)); if (free) return free.id;
+    const pool = FUN.length ? FUN : LOOKS; let best = null, bn = 1e9;
+    for (const p of pool) { const n = used.filter(u => u === p.id).length; if (n < bn) { best = p; bn = n; } }
+    return best ? best.id : "";
+  }
   // group index, pivot in rig px (WizardRenderer.java origins)
   const RIG = { hairback: [0, 356, 478], staff: [1, 464, 490], backarm: [2, 354, 500], legl: [3, 349, 623], legr: [4, 452, 623], torso: [5, 400, 523], frontarm: [6, 464, 490], head: [7, 356, 478] };
   const RK = 0.1, FEET_X = 409, FEET_Y = 795;   // rig px -> world px; a wizard stands ~68px tall
@@ -135,6 +144,22 @@
   const THEMES = { grass: { surf: "grass", dirt: "dirt", bg: "map1_back" }, desert: { surf: "desert_surface", dirt: "desert_dirt", bg: "desert_bg" },
                    canyon: { surf: "canyon_surface", dirt: "canyon_dirt", bg: "canyon_bg" }, dark: { surf: "dark_grass", dirt: "dark_dirt", bg: "map2_back" } };
   let theme = THEMES.grass;
+  // Steam Workshop maps (2026-10-16, "Paul Blart"'s maps for the real game, app 1163690). The original's map_data is the terrain picture
+  // itself (LoadState.java draws it straight into the terrain; solid where alpha >= 0.5); tools scaled each to 1600 wide, bottom-aligned
+  // like the original's sea, into maps/<file>.png. The map select value is "image:<file>|<theme>" (the theme only fills new ground).
+  const WORKSHOP = [["pb_3252472725","Josh"],["pb_3252477176","Josh 2"],["pb_3278855610","49ers"],["pb_3278866557","Goku"],["pb_3282848183","Love always wins"],["pb_3287866146","Loss"],["pb_3287872797","Game theory"],["pb_3288575505","ZAMN"],["pb_3299544503","Geeking gary"],["pb_3299549143","freakbob"],["pb_3374364853","Yes please!"],["pb_3374370073","Feet Of Ancient Lore"],["pb_3374372945","Power word kill josh"],["pb_3374377080","Withered cokc"],["pb_3374384089","Evil Josh"],["pb_3453328595","American Geek"],["pb_3453331739","Geaker"],["pb_3453337230","chad vs soyjack 20000BC"],["pb_3453344516","J"],["pb_3495845663","Dickson"],["pb_3653376576","Teacher Dad"],["pb_3653378494","Butnker"],["pb_3653385733","Purple yosh"],["pb_3653392993","Im yogging"],["pb_3653397345","Yodger"],["pb_3653400469","Yoggers 16th birthday"],["pb_3676915758","Josh army"],["pb_3676921496","ohm y"],["pb_3676928045","quentin"],["pb_3676936558","johnjo"],["pb_3695425746","Bosh"],["pb_3695434547","E"],["pb_3705711580","Legendary Battle."],["pb_3706539790","Jawsh"],["pb_3706549227","Gawa's Bizarre Gawa"],["pb_3706554746","With our powers combined"],["pb_3706560930","You can't eat that"],["pb_3707069845","I can eat this"],["pb_3714260646","WAP"],["pb_3774795849","Crawler"]];
+  const MAPIMG = {}, MAPLOAD = {};   // file -> RGBA bytes (W x H) once loaded / its loading promise
+  let paint = null, pendingOps = null, mkGen = 0;   // the image map's colours; carves that arrive while it loads (phones)
+  function loadMap(file) {
+    if (MAPIMG[file]) return Promise.resolve(MAPIMG[file]);
+    return MAPLOAD[file] = MAPLOAD[file] || new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => { const c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d"); x.drawImage(im, 0, 0, W, H); MAPIMG[file] = x.getImageData(0, 0, W, H).data; res(MAPIMG[file]); };
+      im.onerror = () => { delete MAPLOAD[file]; rej(new Error("map " + file)); };
+      im.src = "maps/" + file + ".png";
+    });
+  }
+  const mapFile = v => { const m = /^image:([\w-]+)/.exec(String(v)); return m ? m[1] : ""; };
   const TEX = {};   // name -> {w, h, d: pixel bytes}, read once the picture has loaded
   function tex(n) {
     if (TEX[n]) return TEX[n]; const im = art(n); if (!ok(im)) return null;
@@ -217,7 +242,22 @@
   // ---------- terrain ----------
   function makeTerrain(style, P) {
     const parts = String(style).split("|"); style = parts[0]; curTheme = THEMES[parts[1]] ? parts[1] : "grass"; theme = THEMES[curTheme];
-    const styleFull = style + "|" + curTheme;
+    const styleFull = style + "|" + curTheme, gen = ++mkGen;
+    paint = null; pendingOps = null;
+    const file = mapFile(style);
+    if (file) {
+      ops = [["mk", "image:" + file + "|" + curTheme, P || {}]]; solid.fill(0); dirty = { x0: 0, y0: 0, x1: W, y1: H };
+      const apply = d => {
+        if (gen !== mkGen) return;
+        paint = d; for (let i = 0; i < W * H; i++) solid[i] = d[i * 4 + 3] >= 128 ? 1 : 0;
+        const q = pendingOps || []; pendingOps = null; const was = quiet; quiet = true;
+        for (const o of q) { if (o[0] === "e") ellipse(o[1], o[2], o[3], o[4], o[5]); else rect(o[1], o[2], o[3], o[4], o[5]); }
+        quiet = was; dirty = { x0: 0, y0: 0, x1: W, y1: H };
+      };
+      if (MAPIMG[file]) apply(MAPIMG[file]);
+      else { pendingOps = []; loadMap(file).then(apply, () => { if (gen === mkGen) { pendingOps = null; banner("Map " + file + " didn't load"); } }); }
+      return;
+    }
     P = P || { a: [0, 1, 2, 3].map(() => Math.random() * 6.3), isl: Array.from({ length: style === "islands" ? 6 : 3 }, () => [160 + Math.random() * (W - 320), 190 + Math.random() * 200, 70 + Math.random() * 100, 18 + Math.random() * 18].map(r1)) };
     ops = [["mk", styleFull, P]]; quiet = true;
     solid.fill(0);
@@ -232,6 +272,7 @@
   }
   function ellipse(cx, cy, rx, ry, v) {
     if (!quiet) ops.push(["e", r1(cx), r1(cy), r1(rx), r1(ry), v]);
+    if (pendingOps) { pendingOps.push(["e", cx, cy, rx, ry, v]); return; }
     for (let y = Math.max(0, cy - ry | 0); y < Math.min(H, cy + ry); y++)
       for (let x = Math.max(0, cx - rx | 0); x < Math.min(W, cx + rx); x++)
         if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1) solid[y * W + x] = v;
@@ -241,6 +282,7 @@
   const fill = (cx, cy, r) => ellipse(cx, cy, r, r, 1);
   function rect(x0, y0, x1, y1, v) {
     if (!quiet) ops.push(["r", r1(x0), r1(y0), r1(x1), r1(y1), v]);
+    if (pendingOps) { pendingOps.push(["r", x0, y0, x1, y1, v]); return; }
     for (let y = Math.max(0, y0 | 0); y < Math.min(H, y1); y++) for (let x = Math.max(0, x0 | 0); x < Math.min(W, x1); x++) solid[y * W + x] = v;
     markDirty(x0, y0, x1, y1);
   }
@@ -263,6 +305,10 @@
         const i = y * W + x, k = ((y - y0) * w + (x - x0)) * 4;
         if (!solid[i]) { run = 0; d[k + 3] = 0; continue; }
         const depth = run; run++;
+        if (paint && paint[i * 4 + 3] >= 128) {
+          const p = i * 4, f = (x > 0 && !solid[i - 1] && paint[p - 1] >= 128) || (x < W - 1 && !solid[i + 1] && paint[p + 7] >= 128) || (y > 0 && !solid[i - W] && paint[p - W * 4 + 3] >= 128) ? 0.45 : 1;
+          d[k] = paint[p] * f; d[k + 1] = paint[p + 1] * f; d[k + 2] = paint[p + 2] * f; d[k + 3] = 255; continue;
+        }
         const side = (x > 0 && !solid[i - 1]) || (x < W - 1 && !solid[i + 1]);
         if (ts && td) {
           let r, g, bl, al = 255;
@@ -287,12 +333,31 @@
   function groundBelow(x, y) { while (y < H - 1 && !isSolid(x, y + 1)) y++; return y; }
 
   // ---------- wizards ----------
+  function spawnSpots(n) {   // standable places on a drawn map: ground under both feet, 70 px of air above, clear of the sea and the edges
+    const c = [];
+    for (let x = 40; x < W - 40; x += 6)
+      for (let y = 4; y < SEA - 24; y++) {
+        if (isSolid(x, y) || !isSolid(x, y + 1)) continue;
+        let okHere = isSolid(x - 7, y + 4) && isSolid(x + 7, y + 4);
+        for (let yy = y - 70; okHere && yy <= y; yy += 5) okHere = !isSolid(x - 9, yy) && !isSolid(x, yy) && !isSolid(x + 9, yy);
+        if (okHere) c.push({ x, y });
+      }
+    if (!c.length) return null;
+    const out = [c[Math.random() * c.length | 0]];
+    while (out.length < n) {
+      let best = null, bd = -1;
+      for (const p of c) { const d = Math.min(...out.map(q => Math.hypot(p.x - q.x, (p.y - q.y) * 0.5))); if (d > bd) { bd = d; best = p; } }
+      out.push(best);
+    }
+    return shuffle(out);
+  }
   function spawnWizards(names) {
     const order = names.map((n, i) => i).sort(() => Math.random() - 0.5);
+    const spots = paint ? spawnSpots(names.length) : null;
     wizards = names.map((entry, i) => { const name = entry.name; const look = entry.look, cid = entry.cid || "";
-      const slot = order[i], x = 110 + (W - 220) * (names.length === 1 ? 0.5 : slot / (names.length - 1));
+      const slot = order[i], x = spots ? spots[i].x : 110 + (W - 220) * (names.length === 1 ? 0.5 : slot / (names.length - 1));
       const book = makeBook(entry.ids), uses = {}; for (const id of book) { const r = rule(byId[id]); if (r.casts) uses[id] = r.casts; }
-      return { name, look, cid, row: entry.row || null, bonus: "", jar: null, book, cd: {}, uses, walking: 0, color: COLORS[i % COLORS.length], x, y: groundBelow(x, 0), vx: 0, vy: 0, hp: 100, alive: true, face: x < W / 2 ? 1 : -1, angle: x < W / 2 ? -0.7 : Math.PI + 0.7, shield: 0, frozen: 0, burn: 0 };
+      return { name, look, cid, row: entry.row || null, bonus: "", jar: null, book, cd: {}, uses, walking: 0, color: COLORS[i % COLORS.length], x, y: spots ? spots[i].y : groundBelow(x, 0), vx: 0, vy: 0, hp: 100, alive: true, face: x < W / 2 ? 1 : -1, angle: x < W / 2 ? -0.7 : Math.PI + 0.7, shield: 0, frozen: 0, burn: 0 };
     });
     turn = Math.floor(Math.random() * wizards.length); startTurn();
   }
@@ -987,8 +1052,8 @@
     if (rowEls().length >= MAX_WIZARDS) return;
     const r = document.createElement("div"); r.className = "row wrow";
     const used = rowEls().map(rowLook);
-    const guess = look !== undefined ? look : ((LOOKS.find(p => v && p.name.toLowerCase() === String(v).toLowerCase()) || LOOKS.find(p => !used.includes(p.id)) || LOOKS[used.length % Math.max(1, LOOKS.length)] || {}).id || "");   // looks repeat once all are used
-    r.innerHTML = '<img class="pv" alt=""><input placeholder="Wizard name" maxlength="16" aria-label="Wizard name"><select class="pic" aria-label="Looks">' + LOOKS.map(p => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("") + '<option value="">plain wizard</option></select><button class="ghost bk"></button><button class="ghost x" aria-label="Remove this wizard">×</button>';
+    const guess = look !== undefined ? look : pickLook(v, used, false);   // friends' looks, then the funny guests; looks repeat once all are used
+    r.innerHTML = '<img class="pv" alt=""><input placeholder="Wizard name" maxlength="16" aria-label="Wizard name"><select class="pic" aria-label="Looks">' + FRIENDS.map(p => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("") + (FUN.length ? '<optgroup label="Party guests">' + FUN.map(p => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("") + "</optgroup>" : "") + '<option value="">plain wizard</option></select><button class="ghost bk"></button><button class="ghost x" aria-label="Remove this wizard">×</button>';
     const inp = r.querySelector("input"), sel = r.querySelector(".pic"), pv = r.querySelector(".pv");
     inp.value = v || ""; sel.value = LOOKS.some(p => p.id === guess) ? guess : "";
     const showPic = () => { pv.src = sel.value ? icon(sel.value) : ""; pv.style.visibility = sel.value ? "visible" : "hidden"; };
@@ -1032,7 +1097,14 @@
     }
     beginMatch(live);
   }
+  let mapWait = false;
   function beginMatch(live) {
+    const mf = mapFile(document.getElementById("map").value);
+    if (mf && !MAPIMG[mf]) {
+      if (mapWait) return; mapWait = true; banner("Loading the map...");
+      loadMap(mf).then(() => { mapWait = false; beginMatch(live); }, () => { mapWait = false; banner("That map didn't load"); });
+      return;
+    }
     const ns = live.map(r => ({ name: rowName(r), look: rowLook(r), ids: r._ids, cid: r.dataset.cid || "", row: r }));
     saveRows(); if (D) closeDraft();
     document.getElementById("setup").style.display = "none";
@@ -1102,7 +1174,8 @@
       if (m.k === "hello") { sendLobby(false); if (phase !== "setup") sendFull(); return; }
       if (m.k === "claim" && m.i === -1 && phase === "setup") {   // 2026-10-16: a phone joins as a NEW wizard (more players than rows)
         const rs = rowEls(); if (rs.length >= MAX_WIZARDS || rs.some(x => x.dataset.cid === m.cid)) return sendLobby(false);
-        addName(String(m.name || "").replace(/[<>]/g, "").trim().slice(0, 16) || "Wizard " + (rs.length + 1));
+        const nm = String(m.name || "").replace(/[<>]/g, "").trim().slice(0, 16) || "Wizard " + (rs.length + 1);
+        addName(nm, pickLook(nm, rs.map(rowLook), true));   // a phone that joins gets a funny party guest (or their own look if the name is a friend's)
         const r = rowEls()[rowEls().length - 1]; if (r) { r.dataset.cid = m.cid; r._ready = false; }
         return rowsChanged();
       }
@@ -1271,5 +1344,12 @@
     get draftState() { return D ? { ids: D.ids.slice(), k: D.k, sel: D.sel, msg: D.msg, ready: !!D.ready, phone: !!D.phone, host: !!D.host } : null; },
     get rows() { return rowEls().map(r => ({ name: rowName(r), ids: (r._ids || []).slice(), ready: !!r._ready, cid: r.dataset.cid || "" })); },
     get wizards() { return wizards.map(w => ({ name: w.name, book: (w.book || []).slice(), bonus: w.bonus || "", hp: w.hp, alive: w.alive, cid: w.cid, x: w.x, y: w.y })); } };   // test hook
+  (() => {   // workshop maps in the map select
+    const sel = document.getElementById("map"); if (!sel || sel.querySelector("optgroup[data-ws]")) return;
+    const og = document.createElement("optgroup"); og.label = "Steam Workshop: Paul Blart"; og.dataset.ws = "1";
+    for (const [f, t] of WORKSHOP) { const o = document.createElement("option"); o.value = "image:" + f + "|grass"; o.textContent = t; og.appendChild(o); }
+    sel.appendChild(og);
+    sel.addEventListener("change", () => { const f = mapFile(sel.value); if (f) loadMap(f).catch(() => {}); });
+  })();
   makeTerrain("hills"); loop();
 })();
