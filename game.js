@@ -161,6 +161,7 @@
   let shots = [], napalms = [], booms = [], sparks = [], bombs = [], seeds = [], beams = [], texts = [], timers = [];
   // 2026-10-16 (owner): Wenwan Bomb - a legendary Acorn Bomb only for the final duel; once cast it squeezes both finalists every turn
   let squeeze = null, wenwanUsed = false;
+  const seen = {}; const fresh = cid => !cid || !(cid in seen) || performance.now() - seen[cid] < 20000;   // a phone not heard from for 20 s
   const duel = () => phase !== "setup" && wizards.filter(w => w.alive).length === 2;
   let mouse = { x: W / 2, y: H / 2, inside: false };
   const keys = {};
@@ -737,16 +738,19 @@
   // 2026-10-16: fixed 60 steps a second - one step per screen refresh ran the whole game twice as fast on 120/144 Hz phones and
   // monitors (charging, flight, turn time); drawing still happens every refresh
   let lastT = 0, acc = 0; const DT = 1000 / 60;
-  function loop(t) {
-    t = typeof t === "number" ? t : performance.now();
-    if (!lastT) lastT = t;
-    acc += Math.min(250, t - lastT); lastT = t;
-    let n = 0;
-    while (acc >= DT && n < 5) { if (mode === "guest") guestStep(); else step(); acc -= DT; n++; }
-    if (n === 5) acc = 0;   // a stalled tab does not fast-forward
+  // 2026-10-16 (owner: "time also gets messed up if someone tabs out"): the game only advanced on screen refreshes, which stop in a
+  // hidden tab - the host tabbing out froze the match for everyone and the lost time was dropped. The clock now runs on real elapsed
+  // time; while the tab is hidden a timer keeps stepping it (browsers slow hidden timers, so it catches up in bigger batches).
+  function advance() {
+    const t = performance.now(); if (!lastT) lastT = t;
+    acc += Math.min(document.hidden ? 120000 : 1000, t - lastT); lastT = t;
+    const lim = document.hidden ? 7200 : 30; let n = 0;
+    while (acc >= DT && n < lim) { if (mode === "guest") guestStep(); else step(); acc -= DT; n++; }
+    if (n >= lim) acc = 0;
     if (n && mode === "host" && phase !== "setup") sendSnap();
-    draw(); requestAnimationFrame(loop);
   }
+  function loop() { advance(); draw(); requestAnimationFrame(loop); }
+  setInterval(() => { if (document.hidden && mode !== "guest") advance(); }, 200);
 
   // ---------- HUD ----------
   const hud = document.getElementById("hud");
@@ -1063,7 +1067,7 @@
     if (mode !== "host") return;
     const inSetup = phase === "setup" && !started;
     const rows = inSetup ? rowEls().map(r => ({ name: rowName(r), look: rowLook(r), ids: r._ids || [], rd: r._ready ? 1 : 0 })) : wizards.map(w => ({ name: w.name, look: w.look }));
-    const cl = Object.fromEntries((inSetup ? rowEls().map((r, i) => [i, r.dataset.cid]) : wizards.map((w, i) => [i, w.cid])).filter(e => e[1]));
+    const cl = Object.fromEntries((inSetup ? rowEls().map((r, i) => [i, r.dataset.cid]) : wizards.map((w, i) => [i, w.cid])).filter(e => e[1] && fresh(e[1])));
     NET.pub("l", { k: "lobby", rows, claims: cl, started: !inSetup, max: maxSpells }, { qos: 1, retain: true });
   }
   function snapState() {
@@ -1093,6 +1097,8 @@
     NET.on("connect", () => { sendLobby(false); if (phase !== "setup") sendFull(); });
     NET.on("g", m => {
       if (!m || typeof m.cid !== "string") return;
+      seen[m.cid] = performance.now();   // 2026-10-16 (owner: "some people can't do their turn"): phones that left come back as takeovers
+      if (m.k === "hb") return;
       if (m.k === "hello") { sendLobby(false); if (phase !== "setup") sendFull(); return; }
       if (m.k === "claim" && m.i === -1 && phase === "setup") {   // 2026-10-16: a phone joins as a NEW wizard (more players than rows)
         const rs = rowEls(); if (rs.length >= MAX_WIZARDS || rs.some(x => x.dataset.cid === m.cid)) return sendLobby(false);
@@ -1107,7 +1113,7 @@
           if (r.dataset.cid !== m.cid) { for (const x of rs) if (x.dataset.cid === m.cid) { x.dataset.cid = ""; x._ready = false; } r.dataset.cid = m.cid; r._ready = false; }
           return rowsChanged();
         }
-        else if (wizards[i] && (!wizards[i].cid || wizards[i].cid === m.cid)) { for (const w of wizards) if (w.cid === m.cid) w.cid = ""; wizards[i].cid = m.cid; sendFull(); }
+        else if (wizards[i] && (!wizards[i].cid || wizards[i].cid === m.cid || !fresh(wizards[i].cid))) { for (const w of wizards) if (w.cid === m.cid) w.cid = ""; wizards[i].cid = m.cid; sendFull(); }
         return sendLobby(false);
       }
       if (m.k === "loadout") {   // a phone's draft: the host checks it and decides
@@ -1154,6 +1160,7 @@
       else if (m.k === "over") gameOver(wizards[m.w]);
     });
     NET.connect(room, ["l", "h"], netStatus);
+    setInterval(() => { try { NET.pub("g", { k: "hb", cid: NET.cid }); } catch (e) {} }, 4000);   // 2026-10-16: heartbeat
   }
   function renderJoin(m) {
     lastLobby = m; if (m.max) maxSpells = m.max;
@@ -1257,6 +1264,7 @@
   let lastCast = "";
   window.__setTurn = v => { if (v > 0) TURN_SECONDS = v; };
   try { const ts = document.getElementById("turnSecs"); if (ts) ts.value = String(TURN_SECONDS); } catch (e) {}
+  setInterval(() => { try { if (mode === "host") sendLobby(phase !== "setup"); } catch (e) {} }, 5000);   // 2026-10-16: join lists stay current (freed wizards)
   window.__wpKill = i => { if (wizards[i]) { wizards[i].alive = false; wizards[i].hp = 0; renderHud(); } };   // test hook
   window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = byId[id]; school = spell.school; const w = cur(); if (w) { if (id !== 910 && !w.book.includes(id)) w.book.push(id); w.cd[id] = 0; delete w.uses[id]; if (spell.bonus) { w.hp = 100; w.bonus = ""; } } arm(true); renderHud(); }, ids: BOOK.map(s => s.id),
     draft: { lockReason, toggleSpell, validLoadout, randomLoadout, makeBook, bookIds, SLOT, DRAFT_BOOKS }, get maxSpells() { return maxSpells; },
