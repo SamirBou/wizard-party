@@ -77,6 +77,8 @@ const SPELLS = [
   { id: 900, school: "PARTY", name: "Last Night of Freedom", aim: "charge", fx: "cluster", radius: 40, damage: 35, bomblets: 8, bombletDamage: 10, fuse: 0, joke: "Goes off in every direction at once.", desc: "A huge burst of party." },
   { id: 901, school: "PARTY", name: "Ball and Chain", aim: "target", fx: "freezeone", freeze: 2, joke: "Somebody isn't going anywhere for a while.", desc: "Locks the wizard nearest the target for 2 turns." },
   { id: 902, school: "PARTY", name: "Round on Me", aim: "self", fx: "healall", amount: 20, joke: "Drinks for everyone (+20 HP to all).", desc: "Heals every wizard 20." },
+  { id: 910, school: "PARTY", name: "Wenwan Bomb", aim: "charge", fx: "wenwan", radius: 34, damage: 15, legendary: true, joke: "Legendary. Squeezes you both until one of you pops.",
+    desc: "LEGENDARY - only when two wizards remain, once per match. A golden acorn blows up, then squeezes both of you harder every turn (5, 10, 15... HP; the caster one tick behind). Whoever dies first loses." },
   { id: 903, school: "PARTY", name: "Hangover", aim: "self", fx: "skip", joke: "The next wizard sits this one out.", desc: "The next player loses their turn." },
   // ---------------- FULL BOOK BONUSES (the original's spells 25000-25008, "Activate <school> bonus for 50 HP") ----------------
   // bonus: never drafted; it appears in the match for every school with BONUS_NEED+ spells equipped. One bonus per wizard (the

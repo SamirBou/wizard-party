@@ -105,11 +105,12 @@
     const ids = validLoadout(loadout, 99) || randomLoadout(maxSpells);
     return BOOK_ORDER.filter(k => BONUS_OF[k] && countIn(ids, k) >= BONUS_NEED).map(k => BONUS_OF[k].id).concat(ids);
   }
-  const inBook = (w, sp) => !!(w && sp && (!w.book || w.book.includes(sp.id)));
+  const inBook = (w, sp) => !!(w && sp && ((sp.id === 910 && duel() && !wenwanUsed) || !w.book || w.book.includes(sp.id)));
   const cdOf = (w, sp) => (w && w.cd && w.cd[sp.id]) || 0;
   const usesOf = (w, sp) => { if (!w || !w.uses || !(sp.id in w.uses)) return Infinity; return w.uses[sp.id]; };
   // why a spell can't be cast right now ("" = it can): the original's cooldown / out of charges / disabled checks (SpellBar.onClick)
   function whyNot(w, sp) {
+    if (sp.id === 910 && (!duel() || wenwanUsed)) return wenwanUsed ? "The Wenwan Bomb is already squeezing" : "Wenwan Bomb only works when two wizards remain";
     if (!inBook(w, sp)) return sp.name + " isn't in your book";
     if (cdOf(w, sp) > 0) return sp.name + " is recharging (" + cdOf(w, sp) + " more turn" + (cdOf(w, sp) > 1 ? "s" : "") + ")";
     if (usesOf(w, sp) <= 0) return sp.name + " is used up";
@@ -118,7 +119,7 @@
     return "";
   }
   const usable = (w, sp) => !!w && !!sp && !whyNot(w, sp);
-  const bookSpells = w => (w && w.book ? w.book.map(id => byId[id]).filter(Boolean) : BOOK);
+  const bookSpells = w => (w && w.book ? (duel() && !wenwanUsed && byId[910] ? [byId[910]] : []).concat(w.book.map(id => byId[id]).filter(Boolean)) : BOOK);
   // party wizards: atlases of the original rig (make_sprites.py), 8 jointed groups x 256px = the 1024 rig at 1/4
   const LOOKS = (typeof ROSTER !== "undefined" ? ROSTER : []);
   const atlas = {}; for (const p of LOOKS) { const im = new Image(); im.src = "sprites/" + p.id + ".png"; atlas[p.id] = im; }
@@ -148,7 +149,7 @@
     [/living bomb|lava bomb|last night/i, "o_bomb"], [/arcane bomb/i, "o_arcane_bomb"], [/arcane/i, "o_arcane_missile"], [/pebble/i, "o_pebble"], [/mud/i, "o_mudrock_medium"],
     [/boulder|scatter/i, "o_rock"], [/ice bomb/i, "o_icebomb"], [/shard/i, "o_frost_shard"], [/snowball/i, "o_iceball"], [/clam/i, "o_clam_closed"], [/jet/i, "o_waterdrop"],
     [/water/i, "o_water_bomb"], [/shock/i, "o_shock_bomb"], [/chain/i, "o_chain_lightning_ball"], [/lightning|bolt/i, "o_spark"], [/drain|necro/i, "o_necro_shot_sprite"],
-    [/acorn/i, "o_acorn"], [/heal/i, "o_healing_particle"], [/shining/i, "o_light_arrow"], [/fire arrow/i, "o_fireball"]];
+    [/acorn|wenwan/i, "o_acorn"], [/heal/i, "o_healing_particle"], [/shining/i, "o_light_arrow"], [/fire arrow/i, "o_fireball"]];
   const SPRITE_BY_SCHOOL = { FIRE: "o_fireball", ARCANE: "o_arcane_missile", ROCK: "o_rock", ICE: "o_iceball", WATER: "o_water_bomb", STORM: "o_lightning_bomb",
     UNDERDARK: "o_necro_shot_sprite", NATURE: "o_leaf", OVERLIGHT: "o_light_arrow", PARTY: "o_firework" };
   const spriteOf = sp => { if (!sp) return null; if (sp._spr === undefined) { const m = SPRITE_BY_NAME.find(([re]) => re.test(sp.name)); sp._spr = m ? m[1] : SPRITE_BY_SCHOOL[sp.school] || null; } return sp._spr; };
@@ -158,6 +159,9 @@
   let wizards = [], turn = 0, wind = 0, phase = "setup", castsLeft = 1, settle = 0, skipNext = false, turnTimer = 0;
   let school = SCHOOL_LIST[0], spell = BOOK.find(s => s.school === school), power = 0, charging = false;
   let shots = [], napalms = [], booms = [], sparks = [], bombs = [], seeds = [], beams = [], texts = [], timers = [];
+  // 2026-10-16 (owner): Wenwan Bomb - a legendary Acorn Bomb only for the final duel; once cast it squeezes both finalists every turn
+  let squeeze = null, wenwanUsed = false;
+  const duel = () => phase !== "setup" && wizards.filter(w => w.alive).length === 2;
   let mouse = { x: W / 2, y: H / 2, inside: false };
   const keys = {};
   const cur = () => wizards[turn];
@@ -430,6 +434,8 @@
     haste(s) { castsLeft += s.casts; floatText(cur().x, cur().y - 50, "+" + s.casts + " casts", "#ffe14a"); sfx("zap"); setTimeout(done, 500); },
     blink(s, o) { const w = cur(); let nx = w.x + Math.cos(o.angle) * s.distance, ny = w.y + Math.sin(o.angle) * s.distance; nx = Math.max(6, Math.min(W - 6, nx)); while (isSolid(nx, ny) && ny > 0) ny--; w.x = nx; w.y = ny; w.vx = w.vy = 0; sfx("zap"); setTimeout(done, 400); },
     drain(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { const got = boom(sh.x, sh.y, s.radius, s.damage, { color: "#8a5cff" }); healW(sh.owner, got); } }); },
+    wenwan(s, o) { wenwanUsed = true; shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, s.damage, { color: "#ffd23f" });
+      squeeze = { caster: cur(), n: 0 }; banner('<span style="color:#ffd23f">WENWAN BOMB</span><br>the squeeze begins - first to pop loses'); play("turn", 0.6); done(); } }); },
     seeds(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, s.damage, { color: "#6fe36a" }); for (let i = 0; i < s.count; i++) { const x = sh.x + (Math.random() - 0.5) * 140; if (s.seedTerrain) fill(x, groundBelow(x, Math.max(0, sh.y - 80)) + 6, 12); seeds.push({ x, y: groundBelow(x, Math.max(0, sh.y - 80)), armed: 1 }); } } }); },
     vine(s, o) { let inside = false, i = 0; for (; i < s.length; i += 4) { const x = o.x + Math.cos(o.angle) * i, y = o.y + Math.sin(o.angle) * i; if (isSolid(x, y)) inside = true; else if (inside) break; } const ex = o.x + Math.cos(o.angle) * i, ey = o.y + Math.sin(o.angle) * i; beams.push({ x: ex, y1: ey, x0: o.x, y0: o.y, life: 25, c: "#6fe36a", w: 5 }); setTimeout(() => { boom(ex, ey, s.radius, s.damage, { color: "#6fe36a", knockback: 7 }); done(); }, 300); },
     bridge(s, o) { for (let i = 20; i < s.length; i += 4) fill(o.x + Math.cos(o.angle) * i, o.y + 10 + Math.sin(o.angle) * i, 6); sfx("heal"); setTimeout(done, 500); },
@@ -463,6 +469,14 @@
     wind = (Math.random() - 0.5) * 2 * WIND_MAX; castsLeft = 1; power = 0; charging = false; finishing = false; turnTimer = TURN_SECONDS * 60;
     for (const b of bombs) if (b.owner === w) b.turns--;
     if (w.burn > 0) { w.burn--; hurt(w, 5); }
+    if (squeeze) {
+      squeeze.n++;
+      const al = wizards.filter(x => x.alive);
+      for (const x of al) { const d = 5 * (x === squeeze.caster ? squeeze.n - 1 : squeeze.n); if (d > 0) { hurt(x, d); floatText(x.x, x.y - 70, "squeeze!", "#ffd23f"); } }
+      const dead = al.filter(x => x.hp <= 0);
+      if (dead.length) { const loser = dead.sort((a, b) => a.hp - b.hp)[0]; loser.alive = false; loser.hp = 0; for (const x of al) if (x !== loser && x.hp <= 0) x.hp = 1;
+        banner(loser.name + " got squeezed!"); booms.push({ x: loser.x, y: loser.y - 30, r: 40, t: 0, color: "#ffd23f" }); phase = "over"; return setTimeout(() => gameOver(al.find(x => x !== loser)), 1200); }
+    }
     if (w.bonus === "OVERLIGHT") healW(w, 5);                 // Overlight Bonus: +5 HP every turn
     if (w.frozen > 0) { w.frozen--; banner(w.name + " is frozen and loses this turn"); phase = "wait"; setTimeout(() => nextTurn(), 1500); return; }
     for (const id in w.cd) if (w.cd[id] > 0) w.cd[id]--;
@@ -676,6 +690,12 @@
     ctx.restore(); return true;
   }
   function drawWizard(w, active) {
+    if (squeeze && w.alive) {   // the Wenwan squeeze: golden coils that tighten each turn
+      const k = Math.min(6, 2 + squeeze.n);
+      ctx.save(); ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 2 + squeeze.n * 0.6; ctx.globalAlpha = 0.85;
+      for (let i = 0; i < k; i++) { ctx.beginPath(); ctx.ellipse(w.x, w.y - 30 + Math.sin(tick / 9 + i) * 2, 24 - squeeze.n * 1.2, 7, 0, 0, Math.PI * 2); ctx.translate(0, -8); ctx.stroke(); }
+      ctx.restore();
+    }
     if (w.walking > 0) w.walking--; if (w.casting > 0) w.casting--;
     ctx.save(); ctx.translate(w.x, w.y);
     if (w.frozen) { ctx.fillStyle = "#8fe3ff55"; ctx.fillRect(-18, -66, 36, 66); }
@@ -1012,7 +1032,7 @@
     const ns = live.map(r => ({ name: rowName(r), look: rowLook(r), ids: r._ids, cid: r.dataset.cid || "", row: r }));
     saveRows(); if (D) closeDraft();
     document.getElementById("setup").style.display = "none";
-    shots = []; napalms = []; bombs = []; seeds = []; timers = []; booms = []; sparks = []; beams = []; texts = [];
+    shots = []; napalms = []; bombs = []; seeds = []; timers = []; booms = []; sparks = []; beams = []; texts = []; squeeze = null; wenwanUsed = false;
     makeTerrain(document.getElementById("map").value); spawnWizards(ns);
     if (mode === "host") { sendFull(); sendLobby(true); }
   }
@@ -1048,7 +1068,7 @@
   }
   function snapState() {
     const cw = cur();
-    return { k: "s", n: ++snapN, bk: cw ? [cw.cd, cw.uses, cw.book, cw.bonus || ""] : null, ph: phase, tu: turn, wi: Math.round(wind * 1e4) / 1e4, cl: castsLeft, tt: turnTimer, sp: spell.id, pw: r1(power), ch: charging, sh: shake,
+    return { k: "s", wq: squeeze ? squeeze.n + 1 : 0, wu: wenwanUsed ? 1 : 0, n: ++snapN, bk: cw ? [cw.cd, cw.uses, cw.book, cw.bonus || ""] : null, ph: phase, tu: turn, wi: Math.round(wind * 1e4) / 1e4, cl: castsLeft, tt: turnTimer, sp: spell.id, pw: r1(power), ch: charging, sh: shake,
       w: wizards.map(w => [r1(w.x), r1(w.y), r1(w.vx), r1(w.vy), w.hp, w.face, Math.round(w.angle * 100) / 100, w.alive ? 1 : 0, w.air ? 1 : 0, w.walking | 0, w.casting | 0, w.frozen | 0, w.shield | 0, w.burn | 0, w.jar ? [w.jar.x, w.jar.y] : 0, w.bonus || ""]),
       s: shots.map(o => [r1(o.x), r1(o.y), r1(o.vx), r1(o.vy), o.r, o.color, o.grav]),
       na: napalms.map(n => [r1(n.x), r1(n.y)]), bo: bombs.map(b => [r1(b.x), r1(b.y), b.turns]), se: seeds.map(o => [r1(o.x), r1(o.y)]) };
@@ -1196,7 +1216,7 @@
       opsHave = Math.max(opsHave, m.o0 + (m.o || []).length);
     }
     const was = turn + phase + castsLeft;
-    phase = m.ph; turn = m.tu; wind = m.wi; if (m.bk && wizards[m.tu]) { wizards[m.tu].cd = m.bk[0] || {}; wizards[m.tu].uses = m.bk[1] || {}; if (Array.isArray(m.bk[2])) wizards[m.tu].book = m.bk[2]; wizards[m.tu].bonus = m.bk[3] || ""; } castsLeft = m.cl; turnTimer = m.tt; shake = m.sh || 0;
+    phase = m.ph; turn = m.tu; wind = m.wi; squeeze = m.wq ? { n: m.wq - 1 } : null; wenwanUsed = !!m.wu; if (m.bk && wizards[m.tu]) { wizards[m.tu].cd = m.bk[0] || {}; wizards[m.tu].uses = m.bk[1] || {}; if (Array.isArray(m.bk[2])) wizards[m.tu].book = m.bk[2]; wizards[m.tu].bonus = m.bk[3] || ""; } castsLeft = m.cl; turnTimer = m.tt; shake = m.sh || 0;
     const mine = myTurn();
     m.w.forEach((a, i) => { const w = wizards[i]; if (!w) return; [w.x, w.y, w.vx, w.vy, w.hp] = a; if (!(mine && i === turn)) { w.face = a[5]; w.angle = a[6]; } w.alive = !!a[7]; w.air = !!a[8]; w.walking = a[9]; w.casting = a[10]; w.frozen = a[11]; w.shield = a[12]; w.burn = a[13]; w.jar = a[14] ? { x: a[14][0], y: a[14][1] } : null; w.bonus = a[15] || ""; });
     shots = m.s.map(a => ({ x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], color: a[5], grav: a[6] }));
@@ -1237,7 +1257,8 @@
   let lastCast = "";
   window.__setTurn = v => { if (v > 0) TURN_SECONDS = v; };
   try { const ts = document.getElementById("turnSecs"); if (ts) ts.value = String(TURN_SECONDS); } catch (e) {}
-  window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = byId[id]; school = spell.school; const w = cur(); if (w) { if (!w.book.includes(id)) w.book.push(id); w.cd[id] = 0; delete w.uses[id]; if (spell.bonus) { w.hp = 100; w.bonus = ""; } } arm(true); renderHud(); }, ids: BOOK.map(s => s.id),
+  window.__wpKill = i => { if (wizards[i]) { wizards[i].alive = false; wizards[i].hp = 0; renderHud(); } };   // test hook
+  window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = byId[id]; school = spell.school; const w = cur(); if (w) { if (id !== 910 && !w.book.includes(id)) w.book.push(id); w.cd[id] = 0; delete w.uses[id]; if (spell.bonus) { w.hp = 100; w.bonus = ""; } } arm(true); renderHud(); }, ids: BOOK.map(s => s.id),
     draft: { lockReason, toggleSpell, validLoadout, randomLoadout, makeBook, bookIds, SLOT, DRAFT_BOOKS }, get maxSpells() { return maxSpells; },
     get draftState() { return D ? { ids: D.ids.slice(), k: D.k, sel: D.sel, msg: D.msg, ready: !!D.ready, phone: !!D.phone, host: !!D.host } : null; },
     get rows() { return rowEls().map(r => ({ name: rowName(r), ids: (r._ids || []).slice(), ready: !!r._ready, cid: r.dataset.cid || "" })); },
