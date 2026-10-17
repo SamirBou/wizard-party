@@ -207,6 +207,7 @@
       <button class="ghost" id="add">+ wizard</button>
       <select id="map" aria-label="Map"><option value="hills|grass">Castle hills</option><option value="islands|grass">Sky islands</option><option value="hills|desert">Desert</option><option value="islands|canyon">Canyon</option><option value="hills|dark">Dark forest</option></select>
       <select id="maxSpells" aria-label="Spells per wizard" title="How many spells each wizard equips"></select>
+      <select id="turnSecs" aria-label="Turn time" title="Seconds per turn" onchange="try{localStorage.setItem('wp_turn',this.value)}catch(e){}; window.__setTurn && __setTurn(+this.value)"><option value="30">30 s turns (original)</option><option value="45">45 s turns</option><option value="60" selected>60 s turns</option><option value="90">90 s turns</option><option value="120">2 min turns</option></select>
       <button class="ghost" id="forgeBtn">Spell Forge</button>
     </div>
     <div class="row wrap" style="margin-top:8px">

@@ -11,7 +11,8 @@
   const POWER_SPEED = 19.1;       // px/frame at power 1 (charge 100); speed = POWER_SPEED * power, no floor
   const POWER_CAP = 2.5;          // sanity stop only (charge 250, a 3.3 s hold); the real client has no cap at all
   const WIND_MAX = 0;             // the real game has no wind; the old value was 0.085
-  const TURN_SECONDS = 30;        // the real turn timer
+  let TURN_SECONDS = 60;          // the real game uses 30; owner 2026-10-16: "time limit too short" -> a setup choice, 60 by default
+  try { TURN_SECONDS = +localStorage.getItem("wp_turn") || 60; } catch (e) {}
   const COLORS = ["#ff5d5d", "#5db7ff", "#7dff6a", "#ffcf4a", "#d07bff", "#ff9a3d", "#4fffe0", "#ff6fd0", "#c8ff3d", "#ff3d6e", "#3d7bff", "#ffe6a0", "#a7a0ff", "#ffb0d8", "#5fd6a0", "#e8e8e8"];
   const cv = document.getElementById("game"), ctx = cv.getContext("2d");
   const terr = document.createElement("canvas"); terr.width = W; terr.height = H;
@@ -1234,6 +1235,8 @@
   const qRoom = (new URLSearchParams(location.search).get("room") || "").toUpperCase();
   if (/^[A-Z]{4}$/.test(qRoom)) joinRoom(qRoom);
   let lastCast = "";
+  window.__setTurn = v => { if (v > 0) TURN_SECONDS = v; };
+  try { const ts = document.getElementById("turnSecs"); if (ts) ts.value = String(TURN_SECONDS); } catch (e) {}
   window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = byId[id]; school = spell.school; const w = cur(); if (w) { if (!w.book.includes(id)) w.book.push(id); w.cd[id] = 0; delete w.uses[id]; if (spell.bonus) { w.hp = 100; w.bonus = ""; } } arm(true); renderHud(); }, ids: BOOK.map(s => s.id),
     draft: { lockReason, toggleSpell, validLoadout, randomLoadout, makeBook, bookIds, SLOT, DRAFT_BOOKS }, get maxSpells() { return maxSpells; },
     get draftState() { return D ? { ids: D.ids.slice(), k: D.k, sel: D.sel, msg: D.msg, ready: !!D.ready, phone: !!D.phone, host: !!D.host } : null; },
