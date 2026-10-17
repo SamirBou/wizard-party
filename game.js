@@ -3,7 +3,7 @@
 (() => {
   "use strict";
   const W = 1600, H = 900, SEA = H - 34;
-  const COLORS = ["#ff5d5d", "#5db7ff", "#7dff6a", "#ffcf4a", "#d07bff", "#ff9a3d", "#4fffe0", "#ff6fd0"];
+  const COLORS = ["#ff5d5d", "#5db7ff", "#7dff6a", "#ffcf4a", "#d07bff", "#ff9a3d", "#4fffe0", "#ff6fd0", "#c8ff3d", "#ff3d6e", "#3d7bff", "#ffe6a0", "#a7a0ff", "#ffb0d8", "#5fd6a0", "#e8e8e8"];
   const cv = document.getElementById("game"), ctx = cv.getContext("2d");
   const terr = document.createElement("canvas"); terr.width = W; terr.height = H;
   const tctx = terr.getContext("2d");
@@ -13,6 +13,7 @@
   // ---------- spell book (with the Spell Forge's saved renames) ----------
   let forge = {}; try { forge = JSON.parse(localStorage.getItem("wp_forge") || "{}"); } catch (e) {}
   const BOOK = SPELLS.map(s => Object.assign({}, s, forge[s.id] || {}));
+  const byId = {}; for (const s of BOOK) byId[s.id] = s;
   const SCHOOL_LIST = Object.keys(SCHOOLS).filter(k => BOOK.some(s => s.school === k));
   // ---------- spell books, cooldowns and casts (the original: every spell in a book has a cooldown in turns and a cast limit) ----------
   // Values seen in the real match log for the Fire book: Fireball 0/unlimited, Firebomb 2/4, Napalm 0/unl., Rain of Fire 6, Napalm Bomb 2/unl.,
@@ -22,6 +23,7 @@
   const MOVE = /gate|blink|rocket|teleport|speed|bridge/i, GUARD = /shield|heal|expunge|ring/i;
   function rule(sp) {
     if (RULES[sp.id]) return { cd: RULES[sp.id][0], casts: RULES[sp.id][1] };
+    if (sp.bonus) return { cd: 0, casts: 1 };                // a Full Book Bonus: once a match
     if (sp.school === "PARTY") return { cd: 0, casts: 1 };
     if (BIG.test(sp.name)) return { cd: 5, casts: 2 };
     if (MOVE.test(sp.name)) return { cd: 2, casts: 0 };
@@ -29,16 +31,84 @@
     return (sp.damage || 0) >= 40 ? { cd: 2, casts: 0 } : { cd: 0, casts: 0 };   // casts 0 = unlimited
   }
   const SCHOOLS_REAL = SCHOOL_LIST.filter(k => k !== "PARTY");
-  function makeBook(choice) {   // "FIRE+ICE", "random" or "all"
-    let sch = choice === "all" ? SCHOOLS_REAL.slice() : String(choice || "random").split("+").filter(k => SCHOOLS_REAL.includes(k));
-    while (sch.length < 2 && choice !== "all") { const k = SCHOOLS_REAL[Math.floor(Math.random() * SCHOOLS_REAL.length)]; if (!sch.includes(k)) sch.push(k); }
-    return BOOK.filter(sp => sch.includes(sp.school) || sp.school === "PARTY").map(sp => sp.id);
+  // ---------- the draft (the original's spell selection screen, SpellSelectionState.java) ----------
+  // Every school book has 12 slots (BOOKS in spells.js): 0-4 basic, 5-9 need the spell five slots before them, 10-11 (ultimates)
+  // need 5 of the book's slots 0-9 equipped. A loadout holds up to maxSpells spells from any books. Clicking a locked tier-2 spell
+  // equips it together with the spell it needs when two places are free; unequipping drops whatever no longer qualifies.
+  let maxSpells = DEFAULT_MAX_SPELLS;
+  try { const v = +localStorage.getItem("wp_max"); if (v >= 4 && v <= 20) maxSpells = v; } catch (e) {}
+  const draftable = id => !!byId[id] && !byId[id].hidden && !byId[id].bonus;
+  const DRAFT_BOOKS = BOOK_ORDER.filter(k => (BOOKS[k] || []).some(draftable));
+  const SLOT = {};   // spell id -> { k: its book, i: its slot }
+  for (const k of DRAFT_BOOKS) BOOKS[k].forEach((id, i) => { if (i < 12 && draftable(id) && !SLOT[id]) SLOT[id] = { k, i }; });
+  const bookIds = k => Array.from({ length: 12 }, (_, i) => { const id = (BOOKS[k] || [])[i]; return SLOT[id] && SLOT[id].k === k && SLOT[id].i === i ? id : -1; });
+  const countIn = (ids, k, until) => bookIds(k).slice(0, until == null ? 12 : until).filter(id => id >= 0 && ids.includes(id)).length;
+  const BONUS_OF = {}; for (const s of BOOK) if (s.bonus) BONUS_OF[s.school] = s;
+  const cap = k => k.charAt(0) + k.slice(1).toLowerCase();
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  function lockReason(ids, id) {   // "" when the spell may sit next to `ids` (SpellSelectionState.isLocked + its tooltip text)
+    const p = SLOT[id]; if (!p) return "Not in any book";
+    if (p.i >= 5 && p.i < 10) { const need = bookIds(p.k)[p.i - 5]; return ids.includes(need) ? "" : "Requires " + byId[need].name; }
+    if (p.i >= 10) { const n = countIn(ids, p.k, 10); return n >= 5 ? "" : "Requires " + (5 - n) + " more " + p.k.toLowerCase() + " spell" + (5 - n > 1 ? "s" : ""); }
+    return "";
+  }
+  function toggleSpell(ids, id, max) {   // -> { ids, msg }: the original's equipSpell (msg = why nothing changed)
+    ids = ids.slice();
+    if (ids.includes(id)) {                // unequip, then drop every spell that is now locked (a tier 2 without its tier 1, ultimates)
+      ids.splice(ids.indexOf(id), 1);
+      for (let again = true; again;) { again = false; for (const x of ids) if (lockReason(ids, x)) { ids.splice(ids.indexOf(x), 1); again = true; break; } }
+      return { ids, msg: "" };
+    }
+    if (!SLOT[id]) return { ids, msg: "Not in any book" };
+    const why = lockReason(ids, id), p = SLOT[id];
+    if (why && p.i >= 5 && p.i < 10) {     // a tier-2 spell without its tier 1: equip both when two places are free
+      if (ids.length > max - 2) return { ids, msg: why + " (that takes 2 free places)" };
+      ids.push(bookIds(p.k)[p.i - 5], id); return { ids, msg: "" };
+    }
+    if (why) return { ids, msg: why };
+    if (ids.length >= max) return { ids, msg: "Your book is full (" + max + "/" + max + "): take a spell out first" };
+    ids.push(id); return { ids, msg: "" };
+  }
+  function validLoadout(ids, max) {   // the host's check of a loadout from a phone or from storage: the ids, or null
+    if (!Array.isArray(ids) || ids.length > max) return null;
+    const out = [];
+    for (const x of ids) { const id = Number(x); if (!Number.isInteger(id) || !SLOT[id] || out.includes(id)) return null; out.push(id); }
+    for (const id of out) if (lockReason(out, id)) return null;
+    return out;
+  }
+  const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  function randomLoadout(max) {   // two schools to start with (a third when they run dry), filled the way a player would; maybe a party spell
+    const any = a => a[Math.random() * a.length | 0];
+    const pool = shuffle(DRAFT_BOOKS.filter(k => k !== "PARTY")), use = pool.splice(0, 2);
+    let ids = [];
+    if (DRAFT_BOOKS.includes("PARTY") && max >= 6 && Math.random() < 0.6) ids = toggleSpell(ids, any(bookIds("PARTY").filter(x => x >= 0)), max).ids;
+    for (let guard = 0; ids.length < max && guard < 300; guard++) {
+      const opts = [].concat(...use.map(k => bookIds(k).filter(id => id >= 0 && !ids.includes(id)))).filter(id => toggleSpell(ids, id, max).ids.length > ids.length);
+      if (!opts.length) { if (!pool.length) break; use.push(pool.shift()); continue; }
+      ids = toggleSpell(ids, any(opts), max).ids;
+    }
+    return ids;
+  }
+  // a wizard's book in the match: the equipped spells in the order they were equipped (the original's spell bar), led by the Full
+  // Book Bonus of every school with BONUS_NEED+ spells equipped (when the original offers it is the server's call: see spells.js)
+  function makeBook(loadout) {
+    const ids = validLoadout(loadout, 99) || randomLoadout(maxSpells);
+    return BOOK_ORDER.filter(k => BONUS_OF[k] && countIn(ids, k) >= BONUS_NEED).map(k => BONUS_OF[k].id).concat(ids);
   }
   const inBook = (w, sp) => !!(w && sp && (!w.book || w.book.includes(sp.id)));
   const cdOf = (w, sp) => (w && w.cd && w.cd[sp.id]) || 0;
   const usesOf = (w, sp) => { if (!w || !w.uses || !(sp.id in w.uses)) return Infinity; return w.uses[sp.id]; };
-  const usable = (w, sp) => inBook(w, sp) && cdOf(w, sp) <= 0 && usesOf(w, sp) > 0;
-  const bookSpells = w => BOOK.filter(sp => inBook(w, sp));
+  // why a spell can't be cast right now ("" = it can): the original's cooldown / out of charges / disabled checks (SpellBar.onClick)
+  function whyNot(w, sp) {
+    if (!inBook(w, sp)) return sp.name + " isn't in your book";
+    if (cdOf(w, sp) > 0) return sp.name + " is recharging (" + cdOf(w, sp) + " more turn" + (cdOf(w, sp) > 1 ? "s" : "") + ")";
+    if (usesOf(w, sp) <= 0) return sp.name + " is used up";
+    if (sp.bonus && w.bonus) return "You already have the " + w.bonus.toLowerCase() + " bonus (one per wizard)";
+    if (sp.bonus && w.hp <= sp.hpCost) return sp.name + " needs more than " + sp.hpCost + " HP";
+    return "";
+  }
+  const usable = (w, sp) => !!w && !!sp && !whyNot(w, sp);
+  const bookSpells = w => (w && w.book ? w.book.map(id => byId[id]).filter(Boolean) : BOOK);
   // party wizards: atlases of the original rig (make_sprites.py), 8 jointed groups x 256px = the 1024 rig at 1/4
   const LOOKS = (typeof ROSTER !== "undefined" ? ROSTER : []);
   const atlas = {}; for (const p of LOOKS) { const im = new Image(); im.src = "sprites/" + p.id + ".png"; atlas[p.id] = im; }
@@ -206,14 +276,15 @@
     const order = names.map((n, i) => i).sort(() => Math.random() - 0.5);
     wizards = names.map((entry, i) => { const name = entry.name; const look = entry.look, cid = entry.cid || "";
       const slot = order[i], x = 110 + (W - 220) * (names.length === 1 ? 0.5 : slot / (names.length - 1));
-      const book = makeBook(entry.book), uses = {}; for (const id of book) { const r = rule(BOOK.find(x => x.id === id)); if (r.casts) uses[id] = r.casts; }
-      return { name, look, cid, book, cd: {}, uses, walking: 0, color: COLORS[i % COLORS.length], x, y: groundBelow(x, 0), vx: 0, vy: 0, hp: 100, alive: true, face: x < W / 2 ? 1 : -1, angle: x < W / 2 ? -0.7 : Math.PI + 0.7, shield: 0, frozen: 0, burn: 0 };
+      const book = makeBook(entry.ids), uses = {}; for (const id of book) { const r = rule(byId[id]); if (r.casts) uses[id] = r.casts; }
+      return { name, look, cid, row: entry.row || null, bonus: "", jar: null, book, cd: {}, uses, walking: 0, color: COLORS[i % COLORS.length], x, y: groundBelow(x, 0), vx: 0, vy: 0, hp: 100, alive: true, face: x < W / 2 ? 1 : -1, angle: x < W / 2 ? -0.7 : Math.PI + 0.7, shield: 0, frozen: 0, burn: 0 };
     });
     turn = Math.floor(Math.random() * wizards.length); startTurn();
   }
   function hurt(w, amount, src) {
     if (!w.alive || amount <= 0) return 0;
     if (w.shield > 0) { w.shield--; floatText(w.x, w.y - 40, "blocked!", "#fff3b0"); return 0; }
+    if (w.bonus === "ROCK") amount = Math.max(1, amount - 2);   // Rock Bonus: permanent Stone Skin (-2 per hit)
     amount = Math.round(amount); w.hp -= amount; w.hitT = 16; floatText(w.x, w.y - 40, "-" + amount, "#ff6b6b"); if (amount >= 12) sfx("oof", amount); return amount;
   }
   function healW(w, amount) { if (!w.alive) return; const a = Math.min(100 - w.hp, Math.round(amount)); w.hp += a; if (a > 0) floatText(w.x, w.y - 40, "+" + a, "#6bff9a"); }
@@ -234,7 +305,7 @@
       const f = Math.max(0, 1 - d / reach);
       if (opts.heal) { healW(w, opts.heal * Math.max(0.5, f)); continue; }
       total += hurt(w, dmg * (0.35 + 0.65 * f), opts.src);
-      if (opts.freeze) { w.frozen = Math.max(w.frozen, opts.freeze); floatText(w.x, w.y - 56, "frozen", "#8fe3ff"); }
+      if (opts.freeze && w.bonus !== "ICE") { w.frozen = Math.max(w.frozen, opts.freeze); floatText(w.x, w.y - 56, "frozen", "#8fe3ff"); }
       const kb = (opts.knockback || 5) * f * 1.4, ang = Math.atan2(w.y - 14 - y, w.x - x);
       push(w, Math.cos(ang) * kb, Math.sin(ang) * kb - 2.2 * f);
     }
@@ -253,6 +324,31 @@
     shots.push(sh); return sh;
   }
   const fireMult = (s) => (s.school === "FIRE" && cur() && cur().burn > 0 ? 1.5 : 1);
+  // the Full Book Bonus changes to a spell as it is cast (texts in spells.js; what the remake has no spell for is left out)
+  function boosted(w, s) {
+    const b = w && w.bonus; if (!b || s.school !== b) return s;
+    const o = Object.assign({}, s);
+    if (b === "FIRE" && o.radius && o.fx !== "spray") o.radius = Math.round(o.radius * 1.5);   // explosive fire spells: +50% radius
+    if (b === "ARCANE") { if (o.id === 26) o.count++; if (o.id === 30) o.bomblets++; }
+    if (b === "STORM") { if (o.id === 113) o.bounces += 8; if (o.id === 100) o.count += 2; }
+    if (b === "WATER" && (o.id === 80 || o.id === 93)) o.count += 10;
+    if (b === "ROCK" && o.id === 50) o.radius = Math.round(o.radius * 1.5);
+    if (b === "OVERLIGHT") { if (o.id === 310) o.damage += 15; if (o.id === 303) o.extraRays = 2; }
+    if (b === "NATURE" && o.id === 200) o.seedTerrain = true;
+    return o;
+  }
+  function arcaneArrow(w) {   // Arcane Bonus: at the start of your turn an arcane arrow flies at the nearest enemy
+    const t = wizards.filter(z => z.alive && z !== w).sort((a, b) => Math.hypot(a.x - w.x, a.y - w.y) - Math.hypot(b.x - w.x, b.y - w.y))[0], s = byId[26];
+    if (!t || !s) return;
+    const a = Math.atan2(t.y - 20 - (w.y - 40), t.x - w.x);
+    shoot(w.x + Math.cos(a) * 20, w.y - 40 + Math.sin(a) * 20, Math.cos(a) * 9, Math.sin(a) * 9, s, { r: 4, grav: 0, wind: false, onHit(sh) { boom(sh.x, sh.y, 14, 10, { color: sh.color }); } });
+  }
+  function reviveAtJar(w) {   // Underdark Bonus: the soul jar brings its wizard back once
+    const j = w.jar; w.jar = null; if (!j) return false;
+    w.x = j.x; w.y = j.y; while (isSolid(w.x, w.y) && w.y > 0) w.y--;
+    w.vx = w.vy = 0; w.hp = 50; w.burn = 0; w.frozen = 0; w.air = true;
+    banner(w.name + " rises again from the soul jar"); floatText(w.x, w.y - 50, "revived!", "#8a5cff"); return true;
+  }
 
   const FX = {
     explode(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, s.damage * fireMult(s), { keepTerrain: s.keepTerrain, color: sh.color, knockback: s.knockback }); if (s.napalm) napalmAt(sh.x, sh.y, s.napalm, 5); } }); },
@@ -313,7 +409,9 @@
     slab(s, o) { rect(o.tx - 70, o.ty - 10, o.tx + 70, o.ty + 10, 1); for (const w of wizards) while (w.alive && isSolid(w.x, w.y)) w.y--; sfx("boom", 15); setTimeout(done, 500); },
     grow(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { r: 5, onStep(sh) { sh.r = Math.min(18, 5 + sh.t * 0.2); if (sh.t > 70 && !sh.dead) { sh.dead = true; this.onHit(sh); } }, onHit(sh) { const f = Math.min(1, sh.t / 70); boom(sh.x, sh.y, s.radius * (0.6 + f * 0.6), s.damage * (0.4 + f * 0.6), { color: "#dff6ff" }); for (let i = 0; i < 5; i++) shoot(sh.x, sh.y - 6, (Math.random() - 0.5) * 8, -3 - Math.random() * 4, s, { r: 3, onHit(b) { boom(b.x, b.y, 10, 4, { color: "#dff6ff" }); } }); } }); },
     freezebomb(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, s.damage, { color: "#8fe3ff", freeze: s.freeze }); for (let i = 0; i < 10; i++) shoot(sh.x, sh.y - 5, (Math.random() - 0.5) * 9, -3 - Math.random() * 5, s, { r: 2, onHit(b) { boom(b.x, b.y, 6, 1, { color: "#8fe3ff", keepTerrain: true }); } }); } }); },
-    icering() { const w = cur(); for (let a = 0; a < Math.PI * 2; a += 0.05) fill(w.x + Math.cos(a) * 46, w.y - 16 + Math.sin(a) * 46, 7); carve(w.x, w.y - 16, 38); rect(w.x - 12, w.y + 1, w.x + 12, w.y + 6, 1); sfx("heal"); setTimeout(done, 600); },
+    icering(s, o) {   // round yourself, or (Ice Bonus: the original's 30033) round the target
+      const w = cur(), t = s.aim === "target", bx = t ? o.tx : w.x, by = t ? o.ty + 16 : w.y;
+      for (let a = 0; a < Math.PI * 2; a += 0.05) fill(bx + Math.cos(a) * 46, by - 16 + Math.sin(a) * 46, 7); carve(bx, by - 16, 38); rect(bx - 12, by + 1, bx + 12, by + 6, 1); sfx("heal"); setTimeout(done, 600); },
     splash(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, 12, 3, { color: "#3d9bff", keepTerrain: true }); for (let i = 0; i < s.count; i++) shoot(sh.x, sh.y - 6, (Math.random() - 0.5) * 10, -3 - Math.random() * 7, s, { r: 3, onHit(b) { boom(b.x, b.y, s.radius, s.damage, { color: "#3d9bff", keepTerrain: true, knockback: 2 }); } }); } }); },
     heal(s) { const w = cur(); healW(w, s.amount); if (s.cleanse) { w.burn = 0; w.frozen = 0; } sfx("heal"); setTimeout(done, 600); },
     clam(s, o) { let stage = 0; shoot(o.x, o.y, o.vx, o.vy, s, { r: 8, onHit(sh) { if (stage === 0) { stage = 1; sh.vy = -Math.abs(sh.vy) * 0.6 - 3; sh.vx *= 0.7; sh.y -= 4; return true; } for (let i = 0; i < 70; i += 6) carve(sh.x, sh.y + i, 12); boom(sh.x, sh.y + 70, s.radius, s.damage, { color: "#3d9bff", knockback: 8 }); } }); },
@@ -322,15 +420,30 @@
     haste(s) { castsLeft += s.casts; floatText(cur().x, cur().y - 50, "+" + s.casts + " casts", "#ffe14a"); sfx("zap"); setTimeout(done, 500); },
     blink(s, o) { const w = cur(); let nx = w.x + Math.cos(o.angle) * s.distance, ny = w.y + Math.sin(o.angle) * s.distance; nx = Math.max(6, Math.min(W - 6, nx)); while (isSolid(nx, ny) && ny > 0) ny--; w.x = nx; w.y = ny; w.vx = w.vy = 0; sfx("zap"); setTimeout(done, 400); },
     drain(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { const got = boom(sh.x, sh.y, s.radius, s.damage, { color: "#8a5cff" }); healW(sh.owner, got); } }); },
-    seeds(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, s.damage, { color: "#6fe36a" }); for (let i = 0; i < s.count; i++) { const x = sh.x + (Math.random() - 0.5) * 140; seeds.push({ x, y: groundBelow(x, Math.max(0, sh.y - 80)), armed: 1 }); } } }); },
+    seeds(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, s.damage, { color: "#6fe36a" }); for (let i = 0; i < s.count; i++) { const x = sh.x + (Math.random() - 0.5) * 140; if (s.seedTerrain) fill(x, groundBelow(x, Math.max(0, sh.y - 80)) + 6, 12); seeds.push({ x, y: groundBelow(x, Math.max(0, sh.y - 80)), armed: 1 }); } } }); },
     vine(s, o) { let inside = false, i = 0; for (; i < s.length; i += 4) { const x = o.x + Math.cos(o.angle) * i, y = o.y + Math.sin(o.angle) * i; if (isSolid(x, y)) inside = true; else if (inside) break; } const ex = o.x + Math.cos(o.angle) * i, ey = o.y + Math.sin(o.angle) * i; beams.push({ x: ex, y1: ey, x0: o.x, y0: o.y, life: 25, c: "#6fe36a", w: 5 }); setTimeout(() => { boom(ex, ey, s.radius, s.damage, { color: "#6fe36a", knockback: 7 }); done(); }, 300); },
     bridge(s, o) { for (let i = 20; i < s.length; i += 4) fill(o.x + Math.cos(o.angle) * i, o.y + 10 + Math.sin(o.angle) * i, 6); sfx("heal"); setTimeout(done, 500); },
     healball(s, o) { shoot(o.x, o.y, o.vx, o.vy, s, { onHit(sh) { boom(sh.x, sh.y, s.radius, 0, { heal: s.amount, keepTerrain: true, color: "#9dffb0" }); sfx("heal"); } }); },
-    ray(s, o) { beams.push({ x: o.tx, y1: H, life: 30, c: "#fff3b0", w: s.radius * 2 }); sfx("zap"); for (const w of wizards) if (w.alive && Math.abs(w.x - o.tx) < s.radius + 8) hurt(w, s.damage); setTimeout(done, 700); },
+    ray(s, o) {   // (Overlight Bonus: two extra rays at half strength)
+      const rays = [[o.tx, s.damage, s.radius]]; if (s.extraRays) rays.push([o.tx - s.radius * 3, s.damage / 2, s.radius / 2], [o.tx + s.radius * 3, s.damage / 2, s.radius / 2]);
+      for (const [x, d, rr] of rays) { beams.push({ x, y1: H, life: 30, c: "#fff3b0", w: rr * 2 }); for (const w of wizards) if (w.alive && Math.abs(w.x - x) < rr + 8) hurt(w, d); }
+      sfx("zap"); setTimeout(done, 700); },
     piety() { const live = wizards.filter(w => w.alive), avg = Math.round(live.reduce((a, w) => a + w.hp, 0) / live.length); for (const w of live) { floatText(w.x, w.y - 40, "= " + avg, "#fff3b0"); w.hp = avg; } sfx("heal"); setTimeout(done, 700); },
     freezeone(s, o) { const t = wizards.filter(w => w.alive).sort((a, b) => Math.hypot(a.x - o.tx, a.y - o.ty) - Math.hypot(b.x - o.tx, b.y - o.ty))[0]; if (t) { t.frozen = s.freeze; floatText(t.x, t.y - 56, "chained!", "#ff4fa8"); } sfx("zap"); setTimeout(done, 700); },
     healall(s) { for (const w of wizards) healW(w, s.amount); sfx("heal"); setTimeout(done, 700); },
     skip() { skipNext = true; floatText(cur().x, cur().y - 50, "curse!", "#ff4fa8"); setTimeout(done, 600); },
+    bonus(s) {   // a Full Book Bonus (25000-25008): pay the HP, take on the school's bonus, swap in its spell versions
+      const w = cur(), col = SCHOOLS[s.school] || "#fff";
+      w.hp -= s.hpCost; w.hitT = 16; w.bonus = s.school; floatText(w.x, w.y - 40, "-" + s.hpCost, "#ff6b6b"); floatText(w.x, w.y - 62, s.school.toLowerCase() + " bonus!", col);
+      for (const [from, to] of Object.entries(BONUS_SWAP[s.school] || {})) {
+        const i = w.book.indexOf(+from); if (i < 0 || !byId[to]) continue;
+        w.book[i] = +to; if (w.cd[from]) w.cd[to] = w.cd[from];
+        if (from in w.uses) w.uses[to] = w.uses[from]; else { const r = rule(byId[to]); if (r.casts) w.uses[to] = r.casts; }
+      }
+      if (s.school === "UNDERDARK") w.jar = { x: r1(w.x), y: r1(w.y) };
+      for (let i = 0; i < 36; i++) { const a = i / 36 * 6.283; sparks.push({ x: w.x, y: w.y - 30, vx: Math.cos(a) * 4, vy: Math.sin(a) * 4, life: 36, c: col }); }
+      sfx("heal"); setTimeout(done, 900);
+    },
   };
 
   // ---------- turn flow ----------
@@ -340,16 +453,18 @@
     wind = (Math.random() - 0.5) * 0.17; castsLeft = 1; power = 0; charging = false; finishing = false; turnTimer = 45 * 60;
     for (const b of bombs) if (b.owner === w) b.turns--;
     if (w.burn > 0) { w.burn--; hurt(w, 5); }
+    if (w.bonus === "OVERLIGHT") healW(w, 5);                 // Overlight Bonus: +5 HP every turn
     if (w.frozen > 0) { w.frozen--; banner(w.name + " is frozen and loses this turn"); phase = "wait"; setTimeout(() => nextTurn(), 1500); return; }
     for (const id in w.cd) if (w.cd[id] > 0) w.cd[id]--;
-    if (!usable(w, spell)) { const f = bookSpells(w).find(sp => usable(w, sp)); if (f) { spell = f; school = f.school; } }
+    if (w.bonus === "ARCANE") arcaneArrow(w);
+    if (!usable(w, spell) || spell.bonus) { const f = bookSpells(w).find(sp => !sp.bonus && usable(w, sp)) || bookSpells(w).find(sp => usable(w, sp)); if (f) { spell = f; school = f.school; } }
     if (typeof arm === "function") arm(false); camFree = false; play("turn", 0.4);
     phase = "aim"; banner((w.look ? '<img src="' + icon(w.look) + '" style="height:110px;display:block;margin:0 auto 4px">' : "") + '<span style="color:' + w.color + '">' + w.name + "</span>'s turn"); renderHud();
   }
   function done() { finishing = true; }                   // a spell has resolved; the world settles, then the turn moves on
   function afterSettle() {
     finishing = false;
-    for (const w of wizards) if (w.alive && (w.hp <= 0 || w.y > SEA)) { w.alive = false; w.hp = 0; banner(w.name + (w.y > SEA ? " went for a swim" : " has been banished!")); booms.push({ x: w.x, y: Math.min(w.y, SEA), r: 30, t: 0, color: w.color }); }
+    for (const w of wizards) if (w.alive && (w.hp <= 0 || w.y > SEA)) { if (w.jar && reviveAtJar(w)) continue; w.alive = false; w.hp = 0; banner(w.name + (w.y > SEA ? " went for a swim" : " has been banished!")); booms.push({ x: w.x, y: Math.min(w.y, SEA), r: 30, t: 0, color: w.color }); }
     const alive = wizards.filter(w => w.alive);
     if (alive.length <= 1) return gameOver(alive[0]);
     if (castsLeft > 0 && cur().alive) { phase = "aim"; renderHud(); return; }
@@ -358,7 +473,7 @@
   function nextTurn() {
     phase = "wait";
     setTimeout(() => {
-      let n = 0; do { turn = (turn + 1) % wizards.length; } while (!wizards[turn].alive && ++n < 20);
+      let n = 0; do { turn = (turn + 1) % wizards.length; } while (!wizards[turn].alive && ++n <= wizards.length);
       if (skipNext) { skipNext = false; banner(cur().name + " has a hangover and skips"); do { turn = (turn + 1) % wizards.length; } while (!wizards[turn].alive); }
       startTurn();
     }, 700);
@@ -367,8 +482,8 @@
 
   function cast(target) {
     const w = cur(); if (phase !== "aim" || !w.alive) return;
-    const s = spell;
-    if (!usable(w, s)) { banner(s.name + (cdOf(w, s) > 0 ? " is recharging (" + cdOf(w, s) + " more turn" + (cdOf(w, s) > 1 ? "s" : "") + ")" : " is used up")); return; }
+    const why = whyNot(w, spell); if (why) { banner(why); return; }
+    const s = boosted(w, spell);
     const rl = rule(s); if (rl.cd) w.cd[s.id] = rl.cd + 1; if (s.id in w.uses) w.uses[s.id]--;
     castsLeft--; phase = "cast"; w.casting = 45; lastCast = w.name + ": " + s.name;
     const o = { x: w.x + Math.cos(w.angle) * 22, y: w.y - 30 + Math.sin(w.angle) * 22, angle: w.angle, tx: target ? target.x : mouse.x, ty: target ? target.y : mouse.y };
@@ -449,12 +564,14 @@
     for (let up = 0; up <= 6; up++) if (!isSolid(nx, w.y - up - 1) && !isSolid(nx, w.y - up - 24)) { w.x = Math.max(4, Math.min(W - 4, nx)); w.y -= up; return; }
   }
   function physicsW(w) {
-    if (!isSolid(w.x, w.y + 1) || w.vy < 0 || Math.abs(w.vx) > 0.5) {
+    const onSea = w.bonus === "WATER" && w.y >= SEA - 1;      // Water Bonus: permanent Water Skin, the sea holds you up
+    if (!(isSolid(w.x, w.y + 1) || onSea) || w.vy < 0 || Math.abs(w.vx) > 0.5) {
       w.air = true; w.vy = Math.min(14, w.vy + 0.32); w.vx *= 0.99;
       const nx = w.x + w.vx; if (!isSolid(nx, w.y - 12)) w.x = nx; else w.vx = -w.vx * 0.3;
       w.y += w.vy;
       if (w.vy < 0 && isSolid(w.x, w.y - 30)) w.vy = 0;
       if (isSolid(w.x, w.y)) { while (isSolid(w.x, w.y) && w.y > 0) w.y--; if (w.vy > 10) hurt(w, (w.vy - 10) * 4); w.vy = 0; w.vx *= 0.4; if (Math.abs(w.vx) < 0.6) w.vx = 0; }
+      if (w.bonus === "WATER" && w.y >= SEA - 1 && w.vy >= 0) { w.y = SEA - 1; w.vy = 0; w.vx *= 0.4; if (Math.abs(w.vx) < 0.6) { w.vx = 0; w.air = false; } }
       if (w.y > SEA) { w.air = false; w.vx = w.vy = 0; }
     } else { w.air = false; w.vx = 0; w.vy = 0; }
     w.x = Math.max(4, Math.min(W - 4, w.x));
@@ -493,6 +610,7 @@
     ctx.drawImage(terr, 0, 0);
     for (const b of bombs) { const bi = art("o_bomb"); if (ok(bi)) ctx.drawImage(bi, b.x - 13, b.y - 26, 26, 26); else { ctx.fillStyle = "#333"; ctx.beginPath(); ctx.arc(b.x, b.y - 9, 9, 0, 7); ctx.fill(); } ctx.fillStyle = "#ff7a1a"; ctx.font = "bold 12px system-ui"; ctx.textAlign = "center"; ctx.fillText(Math.max(0, b.turns), b.x, b.y - 22); ctx.textAlign = "start"; }
     for (const s of seeds) { const ai = art("o_acorn"); if (ok(ai)) ctx.drawImage(ai, s.x - 7, s.y - 14, 14, 14); else { ctx.fillStyle = "#8b5a2b"; ctx.beginPath(); ctx.ellipse(s.x, s.y - 3, 4, 3, 0, 0, 7); ctx.fill(); } }
+    for (const w of wizards) if (w.jar && w.alive) { const ji = art("o_skull"); if (ok(ji)) ctx.drawImage(ji, w.jar.x - 11, w.jar.y - 24, 22, 22); else { ctx.fillStyle = "#8a5cff"; ctx.fillRect(w.jar.x - 7, w.jar.y - 18, 14, 18); } ctx.fillStyle = w.color; ctx.font = "bold 11px system-ui"; ctx.textAlign = "center"; ctx.fillText("soul jar", w.jar.x, w.jar.y - 28); ctx.textAlign = "start"; }
     for (const n of napalms) { ctx.fillStyle = (tick + n.x) % 6 < 3 ? "#ff8a1a" : "#ffd04a"; ctx.beginPath(); ctx.arc(n.x, n.y - 2, 3 + Math.random() * 2, 0, 7); ctx.fill(); }
     for (const w of wizards) if (w.alive) drawWizard(w, w === cur() && phase === "aim");
     for (const s of shots) {
@@ -599,14 +717,18 @@
     document.body.classList.toggle("guest", mode === "guest");
     requestAnimationFrame(() => { document.getElementById("touch").style.bottom = (hudH() + 10) + "px"; });
     document.getElementById("turn").innerHTML = (w.look ? '<img src="' + icon(w.look) + '" style="height:46px;vertical-align:middle;margin-right:6px">' : "") + '<span style="color:' + w.color + '">' + w.name + "</span>";
-    const mine = bookSpells(w), mySchools = SCHOOL_LIST.filter(k => mine.some(sp => sp.school === k));
-    if (!mySchools.includes(school)) school = mySchools[0];
-    document.getElementById("schools").innerHTML = mySchools.map(k => '<div class="tab' + (k === school ? " on" : "") + '" data-k="' + k + '" style="--c:' + SCHOOLS[k] + '">' + k.toLowerCase() + "</div>").join("");
-    const list = mine.filter(s => s.school === school);
-    document.getElementById("spells").innerHTML = list.map((s, i) => '<div class="spell' + (s === spell ? " on" : "") + (usable(w, s) ? "" : " off") + '" data-id="' + s.id + '"' + ' data-cd="' + (cdOf(w, s) > 0 ? cdOf(w, s) : usesOf(w, s) <= 0 ? "0x" : "") + '"' + ' data-uses="' + (usesOf(w, s) < Infinity ? usesOf(w, s) + "x" : "") + '" title="' + (s.desc || "").replace(/"/g, "&quot;") + '">' + '<img class="sicon" src="assets/img/icon_' + s.id + '.png" onerror="this.style.display=\'none\'" alt="">' + "<b>" + (i + 1) + "</b> " + s.name + '<span class="aim">' + aimLabel(s.aim) + "</span></div>").join("");
+    const mine = bookSpells(w);
+    document.getElementById("schools").innerHTML = "";   // no school tabs: the original shows the whole book on one bar
+    let n = 0;
+    document.getElementById("spells").innerHTML = mine.map(s => {
+      const why = whyNot(w, s), key = s.bonus ? "" : ++n <= 10 ? String(n % 10) : "";
+      return '<div class="spell' + (s === spell ? " on" : "") + (why ? " off" : "") + (s.bonus ? " bonus" : "") + '" data-id="' + s.id + '" data-cd="' + (cdOf(w, s) > 0 ? cdOf(w, s) : usesOf(w, s) <= 0 && !s.bonus ? "0x" : "") + '" data-uses="' + (!s.bonus && usesOf(w, s) < Infinity ? usesOf(w, s) + "x" : "") + '" title="' + esc(s.name + ": " + (s.desc || "") + (why ? " (" + why + ")" : "")) + '">' + '<img class="sicon" src="assets/img/icon_' + s.id + '.png" onerror="this.style.display=\'none\'" alt="">' + (key ? "<b>" + key + "</b> " : "") + esc(s.name) + '<span class="aim">' + (s.bonus ? "full book bonus · " + s.hpCost + " HP" : aimLabel(s.aim)) + "</span></div>";
+    }).join("");
     document.getElementById("desc").textContent = spell.desc || "";
-    document.querySelectorAll(".tab").forEach(e => e.onclick = () => pickSchool(e.dataset.k));
-    document.querySelectorAll(".spell").forEach(e => e.onclick = () => { const s2 = BOOK.find(s => s.id === +e.dataset.id); if (!usable(cur(), s2)) { play("click", 0.3); return; } spell = s2; arm(true); play("page", 0.35); renderHud(); if (spell.aim === "self" && phase === "aim") doCast(); });
+    document.querySelectorAll(".spell").forEach(e => {
+      e.onmouseenter = () => { const s2 = byId[+e.dataset.id], why = s2 && whyNot(cur(), s2); if (s2) document.getElementById("desc").textContent = s2.name + ": " + (s2.desc || "") + (why ? " (" + why + ")" : ""); };
+      e.onclick = () => { const s2 = byId[+e.dataset.id], why = s2 && whyNot(cur(), s2); if (!s2) return; if (why) { play("click", 0.3); if (myTurn()) banner(why); return; } spell = s2; school = s2.school; arm(true); play("page", 0.35); renderHud(); if (spell.aim === "self" && phase === "aim") doCast(); };
+    });
   }
   const aimLabel = a => ({ charge: "aim + charge", angle: "aim", target: "click a spot", aerial: "from the sky", self: "instant" })[a] || a;
   function pickSchool(k) { school = k; const w = cur(); spell = bookSpells(w).find(s => s.school === k && usable(w, s)) || bookSpells(w).find(s => s.school === k) || spell; renderHud(); }
@@ -674,14 +796,15 @@
   cv.addEventListener("wheel", e => { e.preventDefault(); zoom = Math.max(1, Math.min(3.2, zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12))); if (zoom > 1) camFree = true; }, { passive: false });
   addEventListener("keydown", e => {
     if (document.activeElement && /INPUT|SELECT/.test(document.activeElement.tagName)) return;
+    if (e.key === "Escape" && D && D.host) { closeDraft(); return; }
     keys[e.key] = true; keys[e.code] = true;
     if (phase !== "aim") return;
     if (e.key === "Escape") { arm(false); return; }
     if (e.key === " ") { e.preventDefault(); if (!armed) { arm(true); renderHud(); return; } if (spell.aim === "charge") startCharge(); else if (!e.repeat) doCast(needsSpot() ? (tgt || mouse) : null); }
     if (e.key === "Enter" || e.code === "ShiftRight" || e.code === "ShiftLeft") { e.preventDefault(); doJump("far"); }
     if (e.key === "Backspace" || e.code === "ControlRight" || e.code === "ControlLeft") { e.preventDefault(); doJump("high"); }
-    if (e.key === "q" || e.key === "e") { const ms = SCHOOL_LIST.filter(k => bookSpells(cur()).some(sp => sp.school === k)), i = ms.indexOf(school); pickSchool(ms[(i + (e.key === "e" ? 1 : ms.length - 1)) % ms.length]); }
-    if (/^[1-9]$/.test(e.key)) { const list = bookSpells(cur()).filter(s => s.school === school); const s2 = list[+e.key - 1]; if (s2 && usable(cur(), s2)) { spell = s2; arm(true); play("page", 0.35); renderHud(); if (s2.aim === "self") doCast(); } }
+    if (e.key === "q" || e.key === "e") { const list = bookSpells(cur()).filter(sp => !sp.bonus && usable(cur(), sp)); if (list.length) { const i = Math.max(0, list.indexOf(spell)); spell = list[(i + (e.key === "e" ? 1 : list.length - 1)) % list.length]; school = spell.school; play("page", 0.35); renderHud(); } }
+    if (/^[0-9]$/.test(e.key)) { const list = bookSpells(cur()).filter(s => !s.bonus); const s2 = list[(+e.key + 9) % 10]; if (s2 && usable(cur(), s2)) { spell = s2; school = s2.school; arm(true); play("page", 0.35); renderHud(); if (s2.aim === "self") doCast(); } }
     if (e.key === "Tab") { e.preventDefault(); doEnd(); }
   });
   addEventListener("keyup", e => { keys[e.key] = false; keys[e.code] = false; if (e.key === " " && charging && phase === "aim") doCast(); });
@@ -695,31 +818,192 @@
   hold("tEnd", doEnd);
 
   // ---------- setup screen + spell forge ----------
+  // ---------- the draft screen ----------
+  // One book open at a time, laid out like the original's (calcSpellPosition): tier 1 on the arc at the left, tier 2 on the arc at
+  // the right (each across from the spell it needs), the ultimates at the top and bottom, the book's cover in the middle (tap it
+  // for the Full Book Bonus). Mouse: pointing shows a spell, a click equips / unequips (the original). Touch: the first tap shows
+  // the spell, a second tap (or the big button) equips / unequips. The Equipped Spells grid: tap one to take it out.
+  let D = null, myIds = [];
+  const $ = id => document.getElementById(id);
+  const AFF_SND = { ARCANE: "teleport", FIRE: "boom_s1", ROCK: "slab", WATER: "cast_water", ICE: "snow", STORM: "zap", PARTY: "toss" };   // bookSelectSoundEffect
+  function firstBook(ids) { const id = (ids || []).find(x => SLOT[x]); return id !== undefined ? SLOT[id].k : DRAFT_BOOKS.includes("FIRE") ? "FIRE" : DRAFT_BOOKS[0]; }
+  let preloaded = false;
+  function openDraft(o) {
+    if (!preloaded) { preloaded = true; for (const id in SLOT) new Image().src = "assets/img/icon_" + id + ".png"; for (const k of DRAFT_BOOKS) new Image().src = "assets/img/book_" + k + ".png"; }
+    const prev = D && o.keep ? D : null;
+    D = Object.assign({ k: prev ? prev.k : firstBook(o.ids), sel: prev ? prev.sel : null, msg: prev ? prev.msg : "" }, o);
+    $("draft").style.display = "flex"; renderDraft();
+  }
+  function closeDraft() { D = null; $("draft").style.display = "none"; }
+  function slotPos(i) {   // SpellSelectionState.calcSpellPosition, as % of the book box (screen y points down)
+    const R = 37; if (i >= 10) return { x: 50, y: i === 10 ? 50 - R : 50 + R };
+    const a = (i < 5 ? 240 - i * 30 : -60 + (i - 5) * 30) * Math.PI / 180;
+    return { x: Math.round((50 + R * Math.cos(a)) * 100) / 100, y: Math.round((50 - R * Math.sin(a)) * 100) / 100 };
+  }
+  const iconImg = (id, cls) => '<img class="' + (cls || "") + '" src="assets/img/icon_' + id + '.png" alt="" draggable="false" onerror="this.style.visibility=\'hidden\'">';
+  function ruleText(sp) { const r = rule(sp); return (r.cd ? "cooldown " + r.cd + " turn" + (r.cd > 1 ? "s" : "") : "no cooldown") + " · " + (r.casts ? r.casts + " cast" + (r.casts > 1 ? "s" : "") + " a match" : "unlimited casts") + " · " + aimLabel(sp.aim); }
+  function renderDraft() {
+    if (!D) return;
+    const k = D.k, col = SCHOOLS[k] || "#fff", n = D.ids.length, over = n > D.max;
+    $("dPic").src = D.look ? icon(D.look) : ""; $("dPic").style.visibility = D.look ? "visible" : "hidden";
+    $("dName").textContent = D.name || "Wizard";
+    $("dCount").innerHTML = "Equipped <b class=\"" + (over ? "bad" : n === D.max ? "full" : "") + "\">" + n + "/" + D.max + "</b>" + (over ? " · take out " + (n - D.max) : "");
+    $("dNote").textContent = D.note || "";
+    $("dReady").textContent = D.readyText || "Ready"; $("dReady").classList.toggle("on", !!D.ready); $("dReady").disabled = over;
+    $("dClose").hidden = !D.host; $("dChange").hidden = !D.phone;
+    $("dTabs").innerHTML = DRAFT_BOOKS.map(b => { const c = countIn(D.ids, b); return '<button class="dtab' + (b === k ? " on" : "") + '" data-a="tab" data-k="' + b + '" style="--c:' + (SCHOOLS[b] || "#fff") + '" aria-label="Book of ' + cap(b) + '"><img src="assets/img/book_' + b + '.png" alt="" draggable="false"><span>' + cap(b) + "</span>" + (c ? "<i>" + c + "</i>" : "") + "</button>"; }).join("");
+    const ids = bookIds(k), have = countIn(D.ids, k), bon = BONUS_OF[k];
+    let h = '<svg class="dlinks" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">';
+    // the anchor lines between a tier-2 spell and the one it needs: for equipped pairs and the pair being looked at (SpellTargetRenderer.drawAnchor)
+    for (let i = 5; i < 10; i++) if (ids[i] >= 0 && ids[i - 5] >= 0 && (D.ids.includes(ids[i - 5]) || D.sel === ids[i] || D.sel === ids[i - 5])) { const a = slotPos(i - 5), b = slotPos(i), on = D.ids.includes(ids[i - 5]); h += '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="' + col + '" stroke-opacity="' + (on ? 0.9 : 0.35) + '" stroke-width="' + (on ? 0.9 : 0.5) + '"' + (on ? "" : ' stroke-dasharray="1.6 1.6"') + "/>"; }
+    h += "</svg>";
+    h += '<button class="dcover' + (D.sel === "bonus" ? " sel" : "") + '" data-a="bonus" aria-label="Full Book Bonus"><img src="assets/img/book_' + k + '.png" alt="" draggable="false">' + (bon ? '<span class="bb' + (have >= BONUS_NEED ? " on" : "") + '">' + (have >= BONUS_NEED ? "bonus ✓" : "bonus " + have + "/" + BONUS_NEED) + "</span>" : "") + "</button>";
+    h += '<div class="dtitle" style="color:' + col + '">' + cap(k) + " <small>" + have + "/" + ids.filter(x => x >= 0).length + "</small>" + (BOOK_WIP.includes(k) ? "<em>Work-in-Progress</em>" : k === "PARTY" ? "<em>party add-on</em>" : "") + "</div>";
+    for (let i = 0; i < 12; i++) {
+      const p = slotPos(i), id = ids[i], ult = i >= 10;
+      if (id < 0) { h += '<div class="dslot empty' + (ult ? " ult" : "") + '" style="left:' + p.x + "%;top:" + p.y + '%"></div>'; continue; }
+      const eq = D.ids.includes(id), why = eq ? "" : lockReason(D.ids, id);
+      h += '<button class="dslot' + (ult ? " ult" : "") + (eq ? " eq" : "") + (why ? " lock" : "") + (D.sel === id ? " sel" : "") + (D.shake === id ? " shake" : "") + '" data-a="slot" data-id="' + id + '" style="left:' + p.x + "%;top:" + p.y + "%;--c:" + col + '" aria-label="' + esc(byId[id].name + (eq ? " (equipped)" : why ? " (" + why + ")" : "")) + '">' + iconImg(id, "si") + (why ? '<img class="lk" src="assets/img/ui_lock.png" alt="" draggable="false">' : "") + "</button>";
+    }
+    $("dBook").innerHTML = h; D.shake = null;
+    renderDraftInfo();
+    let g = "";
+    for (let i = 0; i < Math.max(D.max, n); i++) { const id = D.ids[i]; g += id === undefined ? '<div class="deq empty"></div>' : '<button class="deq' + (i >= D.max ? " over" : "") + '" data-a="eq" data-id="' + id + '" style="--c:' + (SCHOOLS[byId[id].school] || "#fff") + '" aria-label="' + esc(byId[id].name) + ' (tap to take out)" title="' + esc(byId[id].name) + ' (click to take out)">' + iconImg(id) + "</button>"; }
+    $("dEquip").innerHTML = g;
+    $("dEqHead").innerHTML = "Equipped Spells <span>" + n + "/" + D.max + "</span>";
+    $("dMsg").textContent = D.msg || "";
+  }
+  function renderDraftInfo() {
+    const box = $("dInfo"), k = D.k;
+    if (D.sel === "bonus") {
+      const b = BONUS_OF[k], have = countIn(D.ids, k);
+      box.innerHTML = b ? iconImg(b.id, "ic") + "<div><b style=\"color:" + SCHOOLS[k] + "\">Book of " + cap(k) + "</b> <small>Full Book Bonus</small><p>" + esc(b.desc) + "</p><p class=\"" + (have >= BONUS_NEED ? "ok" : "req") + "\">" + (have >= BONUS_NEED ? "In your book for the match: cast it once (one bonus per wizard)." : "Equip " + (BONUS_NEED - have) + " more " + k.toLowerCase() + " spell" + (BONUS_NEED - have > 1 ? "s" : "") + " to bring it into the match.") + "</p></div>"
+        : "<div><b>" + cap(k) + "</b><p>This book has no Full Book Bonus.</p></div>";
+      return;
+    }
+    const sp = byId[D.sel];
+    if (!sp || !SLOT[sp.id]) { box.innerHTML = '<div class="hint">' + (coarse ? "Tap a spell to read it, tap it again to equip it." : "Point at a spell to read it, click to equip it.") + " Tier-2 spells need the spell across the book, the ultimates at the top and bottom need 5 spells of their book. The book's cover holds its Full Book Bonus.</div>"; return; }
+    const eq = D.ids.includes(sp.id), why = eq ? "" : lockReason(D.ids, sp.id), i = SLOT[sp.id].i, tier = i < 5 ? "tier 1" : i < 10 ? "tier 2" : "ultimate";
+    const t = toggleSpell(D.ids, sp.id, D.max), can = !t.msg;
+    const label = eq ? "Take out" : why && can ? "Equip both" : can ? "Equip" : why ? "Locked" : "Book full";
+    box.innerHTML = iconImg(sp.id, "ic") + "<div><b style=\"color:" + (SCHOOLS[sp.school] || "#fff") + "\">" + esc(sp.name) + "</b> <small>" + tier + "</small><p>" + esc(sp.desc || "") + "</p><p class=\"meta\">" + ruleText(sp) + "</p>" + (why ? "<p class=\"req\">" + esc(why) + "</p>" : "") + "</div><button class=\"dgo" + (eq ? " rm" : "") + "\" data-a=\"go\" data-id=\"" + sp.id + "\"" + (can ? "" : " disabled") + ">" + label + "</button>";
+  }
+  function draftChanged() { D.ready = false; if (D.phone) D.readyText = "Ready"; if (D.onChange) D.onChange(D.ids.slice()); }
+  function draftToggle(id) {
+    const before = D.ids, r = toggleSpell(D.ids, id, D.max);
+    if (r.msg) { D.msg = r.msg; D.shake = id; play("click", 0.35); renderDraft(); return; }
+    const gone = before.filter(x => !r.ids.includes(x)), added = r.ids.filter(x => !before.includes(x));
+    D.ids = r.ids;
+    D.msg = gone.length > 1 ? "Took out " + gone.map(x => byId[x].name).join(", ") : added.length > 1 ? "Equipped " + added.map(x => byId[x].name).join(" and ") : "";
+    play("teleport", 0.3); draftChanged(); renderDraft();
+  }
+  $("draft").addEventListener("click", e => {
+    const t = e.target.closest("[data-a]"); if (!t || !D) return;
+    const a = t.dataset.a, id = +t.dataset.id;
+    if (a === "tab") { if (D.k !== t.dataset.k) { D.k = t.dataset.k; D.sel = null; D.msg = ""; play(AFF_SND[D.k] || "page", 0.3); } renderDraft(); return; }
+    if (a === "bonus") { D.sel = "bonus"; play("page", 0.25); renderDraft(); return; }
+    if (a === "slot") { if (coarse && D.sel !== id) { D.sel = id; D.msg = ""; play("page", 0.25); renderDraft(); return; } D.sel = id; draftToggle(id); return; }
+    if (a === "go") { draftToggle(id); return; }
+    if (a === "eq") { D.sel = id; draftToggle(id); }
+  });
+  $("draft").addEventListener("mouseover", e => {
+    if (!D || coarse) return; const t = e.target.closest("[data-a=slot],[data-a=eq],[data-a=bonus]"); if (!t) return;
+    const v = t.dataset.a === "bonus" ? "bonus" : +t.dataset.id; if (D.sel !== v) { D.sel = v; renderDraft(); }
+  });
+  $("dRandom").onclick = () => { if (!D) return; D.ids = randomLoadout(D.max); D.k = firstBook(D.ids); D.sel = null; D.msg = "A random book: change anything you like"; play("page", 0.4); draftChanged(); renderDraft(); };
+  $("dClear").onclick = () => { if (!D) return; D.ids = []; D.sel = null; D.msg = ""; draftChanged(); renderDraft(); };
+  $("dReady").onclick = () => { if (!D) return; if (!D.ids.length) { D.msg = "Equip at least one spell first"; renderDraft(); return; } if (D.ids.length > D.max) return; play("select", 0.4); D.onReady(D.ids.slice()); };
+  $("dClose").onclick = () => { if (D && D.onClose) D.onClose(); };
+  $("dChange").onclick = () => { if (D && D.onChangeWizard) D.onChangeWizard(); };
+
+  // ---------- setup screen + spell forge ----------
+  // 2 to 16 wizards. Each row keeps its loadout (_ids), whether it is ready (_ready) and the phone that claimed it (data-cid).
   const names = document.getElementById("names");
-  const BOOK_OPTS = '<option value="random">random book</option>' + SCHOOLS_REAL.flatMap((a, i) => SCHOOLS_REAL.slice(i + 1).map(b => '<option value="' + a + "+" + b + '">' + a.toLowerCase() + " + " + b.toLowerCase() + "</option>")).join("") + '<option value="all">every spell</option>';
-  function addName(v, look) {
-    if (names.children.length >= 10) return;
-    const r = document.createElement("div"); r.className = "row";
-    const used = [...names.querySelectorAll(".pic")].map(x => x.value);
+  const MAX_WIZARDS = 16;
+  const rowEls = () => [...names.querySelectorAll(".wrow")];
+  const rowName = r => r.querySelector("input").value.trim();
+  const rowLook = r => r.querySelector(".pic").value;
+  function rowUi(r) {   // the row's spell-book button says how far that wizard's draft is
+    const b = r.querySelector(".bk"), n = (r._ids || []).length, phone = !!r.dataset.cid;
+    b.textContent = phone ? (r._ready ? "phone: ready ✓" : "phone: drafting " + n + "/" + maxSpells) : r._ready ? "✓ " + n + " spells" : n ? "spells " + n + "/" + maxSpells : "pick spells";
+    b.classList.toggle("ok", !!r._ready); b.classList.toggle("phone", phone); b.disabled = phone;
+    b.title = phone ? "This wizard drafts on their phone" : "Open this wizard's spell book";
+    r.classList.toggle("claimed", phone);
+  }
+  function saveRows() { try { localStorage.setItem("wp_names2", JSON.stringify(rowEls().map(r => ({ name: rowName(r), look: rowLook(r), ids: r._ids || [] })).filter(e => e.name))); } catch (e) {} }
+  function rowsChanged() {
+    if (mode === "guest") return;
+    rowEls().forEach(rowUi);
+    document.getElementById("add").disabled = rowEls().length >= MAX_WIZARDS;
+    const live = rowEls().filter(rowName), waiting = live.filter(r => !r._ready);
+    document.getElementById("readyNote").textContent = live.length < 2 ? "add at least 2 wizards" : waiting.length ? waiting.length + " of " + live.length + " still drafting" : "everyone is ready";
+    sendLobby(false); saveRows();
+  }
+  function addName(v, look, ids) {
+    if (rowEls().length >= MAX_WIZARDS) return;
+    const r = document.createElement("div"); r.className = "row wrow";
+    const used = rowEls().map(rowLook);
     const guess = look !== undefined ? look : ((LOOKS.find(p => v && p.name.toLowerCase() === String(v).toLowerCase()) || LOOKS.find(p => !used.includes(p.id)) || {}).id || "");
-    r.innerHTML = '<img class="pv" src="' + (guess ? icon(guess) : "") + '"><input placeholder="Wizard name" maxlength="16" value="' + (v || "") + '"><select class="pic">' + LOOKS.map(p => '<option value="' + p.id + '"' + (p.id === guess ? " selected" : "") + ">" + p.name + "</option>").join("") + '<option value="">plain wizard</option></select><select class="book" title="Spell book: two schools">' + BOOK_OPTS + '</select><button class="ghost x">×</button>';
-    const sel = r.querySelector(".pic"), pv = r.querySelector(".pv"); pv.style.visibility = guess ? "visible" : "hidden";
-    sel.onchange = () => { pv.src = sel.value ? icon(sel.value) : ""; pv.style.visibility = sel.value ? "visible" : "hidden"; };
-    r.querySelector(".x").onclick = () => r.remove(); names.appendChild(r);
+    r.innerHTML = '<img class="pv" alt=""><input placeholder="Wizard name" maxlength="16" aria-label="Wizard name"><select class="pic" aria-label="Looks">' + LOOKS.map(p => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("") + '<option value="">plain wizard</option></select><button class="ghost bk"></button><button class="ghost x" aria-label="Remove this wizard">×</button>';
+    const inp = r.querySelector("input"), sel = r.querySelector(".pic"), pv = r.querySelector(".pv");
+    inp.value = v || ""; sel.value = LOOKS.some(p => p.id === guess) ? guess : "";
+    const showPic = () => { pv.src = sel.value ? icon(sel.value) : ""; pv.style.visibility = sel.value ? "visible" : "hidden"; };
+    showPic(); sel.addEventListener("change", () => { showPic(); saveRows(); }); inp.addEventListener("input", () => rowsChanged());
+    r._ids = validLoadout(ids, maxSpells) || []; r._ready = r._ids.length > 0; r.dataset.cid = "";   // a remembered loadout counts as ready
+    r.querySelector(".bk").onclick = () => openRowDraft(r, false);
+    r.querySelector(".x").onclick = () => { r.remove(); rowsChanged(); };
+    names.appendChild(r); rowUi(r);
   }
   let saved = []; try { saved = JSON.parse(localStorage.getItem("wp_names2") || "[]"); } catch (e) {}
-  (saved.length ? saved : LOOKS.slice(0, 8).map(p => ({ name: p.name, look: p.id }))).forEach(e => addName(e.name, e.look));
-  document.getElementById("add").onclick = () => addName("");
-  document.getElementById("start").onclick = () => {
-    const ns = [...names.querySelectorAll(".row")].map((r, i) => ({ name: r.querySelector("input").value.trim(), look: r.querySelector(".pic").value, book: (r.querySelector(".book") || {}).value || "random", cid: claims[i] || "" })).filter(e => e.name);
-    if (ns.length < 2) return banner("Need at least two wizards");
-    try { localStorage.setItem("wp_names2", JSON.stringify(ns)); } catch (e) {}
+  if (!Array.isArray(saved)) saved = [];
+  (saved.length ? saved : LOOKS.slice(0, 8).map(p => ({ name: p.name, look: p.id }))).slice(0, MAX_WIZARDS).forEach(e => e && (typeof e === "string" ? addName(e) : addName(e.name, e.look, e.ids)));
+  const maxSel = document.getElementById("maxSpells");
+  maxSel.innerHTML = Array.from({ length: 17 }, (_, i) => i + 4).map(n => '<option value="' + n + '"' + (n === maxSpells ? " selected" : "") + ">" + n + " spells" + (n === DEFAULT_MAX_SPELLS ? " (default)" : n === 17 ? " (a real match)" : "") + "</option>").join("");
+  maxSel.onchange = () => { maxSpells = +maxSel.value || DEFAULT_MAX_SPELLS; try { localStorage.setItem("wp_max", maxSpells); } catch (e) {} for (const r of rowEls()) if ((r._ids || []).length > maxSpells) r._ready = false; rowsChanged(); };
+  rowsChanged();
+  document.getElementById("add").onclick = () => { addName(""); rowsChanged(); const rs = rowEls(); if (rs.length) rs[rs.length - 1].querySelector("input").focus(); };
+  document.getElementById("randAll").onclick = () => {
+    let n = 0; for (const r of rowEls()) if (rowName(r) && !r._ready && !r.dataset.cid) { r._ids = randomLoadout(maxSpells); r._ready = true; n++; }
+    rowsChanged(); banner(n ? "Random spell books for " + n + " wizard" + (n > 1 ? "s" : "") : "Everyone on this screen is ready");
+  };
+  function openRowDraft(r, chain) {
+    const left = rowEls().filter(x => rowName(x) && !x._ready && !x.dataset.cid).length;
+    openDraft({ ids: (r._ids || []).slice(), max: maxSpells, name: rowName(r) || "Wizard", look: rowLook(r), ready: !!r._ready, host: true,
+      note: chain ? (left > 1 ? left + " wizards on this screen still need a spell book: pass the screen along after Ready" : "The last one, then the war starts") : "",
+      readyText: chain && left > 1 ? "Ready · next" : chain ? "Ready · start" : "Ready",
+      onChange(ids) { r._ids = ids; r._ready = false; rowsChanged(); },
+      onReady(ids) { r._ids = ids; r._ready = true; rowsChanged(); closeDraft(); if (chain) tryStart(); },
+      onClose() { closeDraft(); } });
+  }
+  let forceAt = -1e9;
+  function tryStart() {   // everyone drafts first: wizards on this screen in turn, phones on their phones
+    const live = rowEls().filter(rowName);
+    if (live.length < 2) return banner("Need at least two wizards");
+    const local = live.find(r => !r._ready && !r.dataset.cid);
+    if (local) return openRowDraft(local, true);
+    const phones = live.filter(r => !r._ready);
+    if (phones.length) {
+      if (performance.now() - forceAt > 6000) { forceAt = performance.now(); return banner("Waiting for " + phones.map(r => esc(rowName(r))).join(", ") + " to press Ready<br><small>Press Start again to hand them random spells</small>"); }
+      for (const r of phones) { r._ids = randomLoadout(maxSpells); r._ready = true; }
+    }
+    beginMatch(live);
+  }
+  function beginMatch(live) {
+    const ns = live.map(r => ({ name: rowName(r), look: rowLook(r), ids: r._ids, cid: r.dataset.cid || "", row: r }));
+    saveRows(); if (D) closeDraft();
     document.getElementById("setup").style.display = "none";
     shots = []; napalms = []; bombs = []; seeds = []; timers = []; booms = []; sparks = []; beams = []; texts = [];
     makeTerrain(document.getElementById("map").value); spawnWizards(ns);
     if (mode === "host") { sendFull(); sendLobby(true); }
+  }
+  document.getElementById("start").onclick = tryStart;
+  document.getElementById("again").onclick = () => {
+    document.getElementById("winner").style.display = "none"; phase = "setup";
+    if (mode === "guest") { document.getElementById("join").style.display = "flex"; if (lastLobby) renderJoin(lastLobby); return; }
+    document.getElementById("setup").style.display = "flex";
+    for (const w of wizards) if (w.row) w.row.dataset.cid = w.cid || "";   // phones keep (or took over) their wizards
+    rowsChanged();
   };
-  document.getElementById("again").onclick = () => { document.getElementById("winner").style.display = "none"; phase = "setup"; if (mode === "guest") document.getElementById("join").style.display = "flex"; else document.getElementById("setup").style.display = "flex"; if (mode === "host") { claims = {}; wizards.forEach((w, i) => { if (w.cid) claims[i] = w.cid; }); sendLobby(false); } };
   document.getElementById("forgeBtn").onclick = () => {
     const box = document.getElementById("forgeList");
     box.innerHTML = BOOK.map(s => '<div class="frow" data-id="' + s.id + '"><span class="dot" style="background:' + SCHOOLS[s.school] + '"></span><input class="fn" value="' + s.name.replace(/"/g, "&quot;") + '"><input class="fj" placeholder="joke line shown when cast" value="' + (s.joke || "").replace(/"/g, "&quot;") + '"></div>').join("");
@@ -732,21 +1016,20 @@
   };
   document.getElementById("forgeClose").onclick = () => document.getElementById("forge").style.display = "none";
   // ---------- playing together on phones ----------
-  let claims = {}, ctlBy = {}, lastSeq = {}, opsSent = 0, snapN = 0, opsHave = 0, lastCtl = 0, myAngle = 0;
-  const setupRows = () => [...names.querySelectorAll(".row")].map(r => ({ name: r.querySelector("input").value.trim(), look: r.querySelector(".pic").value }));
+  let ctlBy = {}, lastSeq = {}, opsSent = 0, snapN = 0, opsHave = 0, lastCtl = 0, myAngle = 0, lastLobby = null, pickList = false, draftRow = -1;
   function netStatus(state, text) { for (const id of ["roomInfo", "joinBox"]) { const el = document.getElementById(id), st = el && el.querySelector(".st"); if (st) { st.textContent = text; st.dataset.state = state; } } }
   // host side
-  function sendLobby(started) {
-    const inSetup = phase === "setup";
-    const rows = inSetup ? setupRows() : wizards.map(w => ({ name: w.name, look: w.look }));
-    const cl = inSetup ? claims : Object.fromEntries(wizards.map((w, i) => [i, w.cid]).filter(e => e[1]));
-    NET.pub("l", { k: "lobby", rows, claims: cl, started: !!started || !inSetup }, { qos: 1, retain: true });
-    document.querySelectorAll("#names .row").forEach((r, i) => r.classList.toggle("claimed", !!claims[i]));
+  function sendLobby(started) {   // rows carry each wizard's loadout and whether the host accepted it as ready
+    if (mode !== "host") return;
+    const inSetup = phase === "setup" && !started;
+    const rows = inSetup ? rowEls().map(r => ({ name: rowName(r), look: rowLook(r), ids: r._ids || [], rd: r._ready ? 1 : 0 })) : wizards.map(w => ({ name: w.name, look: w.look }));
+    const cl = Object.fromEntries((inSetup ? rowEls().map((r, i) => [i, r.dataset.cid]) : wizards.map((w, i) => [i, w.cid])).filter(e => e[1]));
+    NET.pub("l", { k: "lobby", rows, claims: cl, started: !inSetup, max: maxSpells }, { qos: 1, retain: true });
   }
   function snapState() {
     const cw = cur();
-    return { k: "s", n: ++snapN, bk: cw ? [cw.cd, cw.uses] : null, ph: phase, tu: turn, wi: Math.round(wind * 1e4) / 1e4, cl: castsLeft, tt: turnTimer, sp: spell.id, pw: r1(power), ch: charging, sh: shake,
-      w: wizards.map(w => [r1(w.x), r1(w.y), r1(w.vx), r1(w.vy), w.hp, w.face, Math.round(w.angle * 100) / 100, w.alive ? 1 : 0, w.air ? 1 : 0, w.walking | 0, w.casting | 0, w.frozen | 0, w.shield | 0, w.burn | 0]),
+    return { k: "s", n: ++snapN, bk: cw ? [cw.cd, cw.uses, cw.book, cw.bonus || ""] : null, ph: phase, tu: turn, wi: Math.round(wind * 1e4) / 1e4, cl: castsLeft, tt: turnTimer, sp: spell.id, pw: r1(power), ch: charging, sh: shake,
+      w: wizards.map(w => [r1(w.x), r1(w.y), r1(w.vx), r1(w.vy), w.hp, w.face, Math.round(w.angle * 100) / 100, w.alive ? 1 : 0, w.air ? 1 : 0, w.walking | 0, w.casting | 0, w.frozen | 0, w.shield | 0, w.burn | 0, w.jar ? [w.jar.x, w.jar.y] : 0, w.bonus || ""]),
       s: shots.map(o => [r1(o.x), r1(o.y), r1(o.vx), r1(o.vy), o.r, o.color, o.grav]),
       na: napalms.map(n => [r1(n.x), r1(n.y)]), bo: bombs.map(b => [r1(b.x), r1(b.y), b.turns]), se: seeds.map(o => [r1(o.x), r1(o.y)]) };
   }
@@ -773,9 +1056,20 @@
       if (m.k === "hello") { sendLobby(false); if (phase !== "setup") sendFull(); return; }
       if (m.k === "claim") {
         const i = m.i | 0;
-        if (phase === "setup") { if (claims[i] && claims[i] !== m.cid) return sendLobby(false); for (const k in claims) if (claims[k] === m.cid) delete claims[k]; claims[i] = m.cid; }
+        if (phase === "setup") {
+          const rs = rowEls(), r = rs[i]; if (!r || (r.dataset.cid && r.dataset.cid !== m.cid)) return sendLobby(false);
+          if (r.dataset.cid !== m.cid) { for (const x of rs) if (x.dataset.cid === m.cid) { x.dataset.cid = ""; x._ready = false; } r.dataset.cid = m.cid; r._ready = false; }
+          return rowsChanged();
+        }
         else if (wizards[i] && (!wizards[i].cid || wizards[i].cid === m.cid)) { for (const w of wizards) if (w.cid === m.cid) w.cid = ""; wizards[i].cid = m.cid; sendFull(); }
         return sendLobby(false);
+      }
+      if (m.k === "loadout") {   // a phone's draft: the host checks it and decides
+        if (phase !== "setup") return;
+        const r = rowEls()[m.i | 0]; if (!r || r.dataset.cid !== m.cid) return;
+        const v = validLoadout(m.ids, maxSpells);
+        if (v) { r._ids = v; r._ready = !!m.ready && v.length > 0; } else r._ready = false;
+        return rowsChanged();
       }
       if (m.k === "ctl") { ctlBy[m.cid] = { walk: Math.sign(m.walk | 0), angle: +m.angle || 0, sp: m.sp | 0, t: performance.now() }; return; }
       if (m.k === "act") {
@@ -816,27 +1110,48 @@
     NET.connect(room, ["l", "h"], netStatus);
   }
   function renderJoin(m) {
+    lastLobby = m; if (m.max) maxSpells = m.max;
+    if (!m.started && phase !== "setup") { phase = "setup"; document.getElementById("winner").style.display = "none"; document.body.classList.remove("myturn"); }   // the host went back to the setup
     const list = document.getElementById("joinList"), cl = m.claims || {};
     list.innerHTML = "";
     (m.rows || []).forEach((r, i) => {
       if (!r.name) return;
       const mine = cl[i] === NET.cid, taken = !!cl[i] && !mine;
       const b = document.createElement("button"); b.className = "jrow" + (mine ? " mine" : "") + (taken ? " taken" : "");
-      b.innerHTML = (r.look ? '<img src="' + icon(r.look) + '" alt="">' : "") + "<span></span><em>" + (mine ? "you" : taken ? "taken" : "tap to play") + "</em>";
+      b.innerHTML = (r.look ? '<img src="' + icon(r.look) + '" alt="">' : "") + "<span></span><em>" + (mine ? "you" : taken ? (r.rd ? "ready" : "taken") : "tap to play") + "</em>";
       b.querySelector("span").textContent = r.name; b.disabled = taken;
-      b.onclick = () => NET.pub("g", { k: "claim", cid: NET.cid, i }, { qos: 1 });
+      b.onclick = () => { pickList = false; NET.pub("g", { k: "claim", cid: NET.cid, i }, { qos: 1 }); };
       list.appendChild(b);
     });
     const mineIdx = Object.keys(cl).find(k => cl[k] === NET.cid);
     document.getElementById("joinHint").textContent = m.started ? (mineIdx !== undefined ? "Game on. Loading the battlefield..." : "Game in progress. Pick a free wizard to take over.") : mineIdx !== undefined ? "You're in. Waiting for the host to start." : "Pick your wizard.";
     if (m.started && mineIdx !== undefined && phase === "setup") NET.pub("g", { k: "hello", cid: NET.cid }, { qos: 1 });
+    // before the match a phone with a wizard builds that wizard's spell book here
+    if (!m.started && mineIdx !== undefined && !pickList && phase === "setup" && m.rows[mineIdx]) phoneDraft(+mineIdx, m.rows[mineIdx]);
+    else { if (D && D.phone) closeDraft(); if (phase === "setup") document.getElementById("join").style.display = "flex"; }
+  }
+  function phoneDraft(i, row) {
+    const fresh = draftRow !== i; draftRow = i;
+    const remember = ids => { try { localStorage.setItem("wp_loadout", JSON.stringify(ids)); } catch (e) {} };
+    const send = ready => NET.pub("g", { k: "loadout", cid: NET.cid, i: draftRow, ids: myIds, ready }, { qos: 1 });
+    if (fresh) {   // this phone's last loadout, else what the host had for this wizard
+      let ids = null; try { ids = JSON.parse(localStorage.getItem("wp_loadout") || "null"); } catch (e) {}
+      myIds = validLoadout(ids, 99) || validLoadout(row.ids, 99) || []; send(false);
+    } else if (row.rd) myIds = validLoadout(row.ids, 99) || myIds;   // once the host says ready its copy is final (it may hand out random spells)
+    document.getElementById("join").style.display = "none";
+    openDraft(Object.assign(row.rd ? { msg: "" } : {}, { ids: myIds.slice(), max: maxSpells, name: row.name, look: row.look, ready: !!row.rd, phone: true, keep: !fresh,
+      readyText: row.rd ? "Ready ✓" : "Ready",
+      note: row.rd ? "Ready! Waiting for the host to start the war. Changing a spell takes the Ready back." : "Build your spell book, then press Ready.",
+      onChange(ids) { myIds = ids; remember(ids); send(false); },
+      onReady(ids) { myIds = ids; remember(ids); send(true); D.msg = "Sent to the host..."; renderDraft(); },
+      onChangeWizard() { pickList = true; closeDraft(); document.getElementById("join").style.display = "flex"; } }));
   }
   function applyFull(m) {
     for (const k in m.forge || {}) { const s2 = BOOK.find(x => x.id === +k); if (s2) Object.assign(s2, m.forge[k]); }
     wizards = (m.wz || []).map(e => ({ name: e.name, look: e.look, cid: e.cid, color: e.color, book: e.book, cd: {}, uses: {}, x: 0, y: 0, vx: 0, vy: 0, hp: 100, alive: true, face: 1, angle: 0, walking: 0, casting: 0 }));
     for (const o of m.ops || []) applyOp(o); opsHave = (m.ops || []).length;
     shots = []; napalms = []; bombs = []; seeds = []; booms = []; sparks = []; beams = []; texts = [];
-    document.getElementById("join").style.display = "none"; document.getElementById("winner").style.display = "none";
+    if (D) closeDraft(); document.getElementById("join").style.display = "none"; document.getElementById("winner").style.display = "none";
     phase = "?"; applySnap(m.snap, true); if (myTurn()) myAngle = cur().angle; renderHud();
   }
   function applyOp(o) { quiet = true; if (o[0] === "mk") makeTerrain(o[1], o[2]); else if (o[0] === "e") ellipse(o[1], o[2], o[3], o[4], o[5]); else if (o[0] === "r") rect(o[1], o[2], o[3], o[4], o[5]); quiet = false; }
@@ -848,9 +1163,9 @@
       opsHave = Math.max(opsHave, m.o0 + (m.o || []).length);
     }
     const was = turn + phase + castsLeft;
-    phase = m.ph; turn = m.tu; wind = m.wi; if (m.bk && wizards[m.tu]) { wizards[m.tu].cd = m.bk[0] || {}; wizards[m.tu].uses = m.bk[1] || {}; } castsLeft = m.cl; turnTimer = m.tt; shake = m.sh || 0;
+    phase = m.ph; turn = m.tu; wind = m.wi; if (m.bk && wizards[m.tu]) { wizards[m.tu].cd = m.bk[0] || {}; wizards[m.tu].uses = m.bk[1] || {}; if (Array.isArray(m.bk[2])) wizards[m.tu].book = m.bk[2]; wizards[m.tu].bonus = m.bk[3] || ""; } castsLeft = m.cl; turnTimer = m.tt; shake = m.sh || 0;
     const mine = myTurn();
-    m.w.forEach((a, i) => { const w = wizards[i]; if (!w) return; [w.x, w.y, w.vx, w.vy, w.hp] = a; if (!(mine && i === turn)) { w.face = a[5]; w.angle = a[6]; } w.alive = !!a[7]; w.air = !!a[8]; w.walking = a[9]; w.casting = a[10]; w.frozen = a[11]; w.shield = a[12]; w.burn = a[13]; });
+    m.w.forEach((a, i) => { const w = wizards[i]; if (!w) return; [w.x, w.y, w.vx, w.vy, w.hp] = a; if (!(mine && i === turn)) { w.face = a[5]; w.angle = a[6]; } w.alive = !!a[7]; w.air = !!a[8]; w.walking = a[9]; w.casting = a[10]; w.frozen = a[11]; w.shield = a[12]; w.burn = a[13]; w.jar = a[14] ? { x: a[14][0], y: a[14][1] } : null; w.bonus = a[15] || ""; });
     shots = m.s.map(a => ({ x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], color: a[5], grav: a[6] }));
     napalms = m.na.map(a => ({ x: a[0], y: a[1], stuck: true })); bombs = m.bo.map(a => ({ x: a[0], y: a[1], turns: a[2] })); seeds = m.se.map(a => ({ x: a[0], y: a[1] }));
     for (const b of m.fb || []) { booms.push({ x: b[0], y: b[1], r: b[2], t: 0, color: b[3] }); for (let i = 0; i < Math.min(20, b[2]); i++) sparks.push({ x: b[0], y: b[1], vx: (Math.random() - 0.5) * b[2] * 0.3, vy: (Math.random() - 0.8) * b[2] * 0.25, life: 30 + Math.random() * 20, c: b[3] }); }
@@ -887,6 +1202,10 @@
   const qRoom = (new URLSearchParams(location.search).get("room") || "").toUpperCase();
   if (/^[A-Z]{4}$/.test(qRoom)) joinRoom(qRoom);
   let lastCast = "";
-  window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = BOOK.find(s => s.id === id); school = spell.school; const w = cur(); if (w) { if (!w.book.includes(id)) w.book.push(id); w.cd[id] = 0; delete w.uses[id]; } arm(true); renderHud(); }, ids: BOOK.map(s => s.id) };   // test hook
+  window.__wp = { get ownedNow() { const w = cur(); return !!(w && w.cid); }, get lastCast() { return lastCast; }, get phase() { return phase; }, get spell() { return spell.name; }, get alive() { return wizards.filter(w => w.alive).length; }, pick(id) { spell = byId[id]; school = spell.school; const w = cur(); if (w) { if (!w.book.includes(id)) w.book.push(id); w.cd[id] = 0; delete w.uses[id]; if (spell.bonus) { w.hp = 100; w.bonus = ""; } } arm(true); renderHud(); }, ids: BOOK.map(s => s.id),
+    draft: { lockReason, toggleSpell, validLoadout, randomLoadout, makeBook, bookIds, SLOT, DRAFT_BOOKS }, get maxSpells() { return maxSpells; },
+    get draftState() { return D ? { ids: D.ids.slice(), k: D.k, sel: D.sel, msg: D.msg, ready: !!D.ready, phone: !!D.phone, host: !!D.host } : null; },
+    get rows() { return rowEls().map(r => ({ name: rowName(r), ids: (r._ids || []).slice(), ready: !!r._ready, cid: r.dataset.cid || "" })); },
+    get wizards() { return wizards.map(w => ({ name: w.name, book: (w.book || []).slice(), bonus: w.bonus || "", hp: w.hp, alive: w.alive, cid: w.cid, x: w.x, y: w.y })); } };   // test hook
   makeTerrain("hills"); loop();
 })();

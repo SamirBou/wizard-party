@@ -78,4 +78,60 @@ const SPELLS = [
   { id: 901, school: "PARTY", name: "Ball and Chain", aim: "target", fx: "freezeone", freeze: 2, joke: "Somebody isn't going anywhere for a while.", desc: "Locks the wizard nearest the target for 2 turns." },
   { id: 902, school: "PARTY", name: "Round on Me", aim: "self", fx: "healall", amount: 20, joke: "Drinks for everyone (+20 HP to all).", desc: "Heals every wizard 20." },
   { id: 903, school: "PARTY", name: "Hangover", aim: "self", fx: "skip", joke: "The next wizard sits this one out.", desc: "The next player loses their turn." },
+  // ---------------- FULL BOOK BONUSES (the original's spells 25000-25008, "Activate <school> bonus for 50 HP") ----------------
+  // bonus: never drafted; it appears in the match for every school with BONUS_NEED+ spells equipped. One bonus per wizard (the
+  // original keeps a single fullBookBonus per wizard, Wizard.java). desc = what it does HERE; orig = the original's text.
+  { id: 25000, school: "ARCANE", name: "Arcane Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Arcane Arrows and Arcane Bomb shoot 1 extra arrow, and at the start of each of your turns you shoot an arcane arrow at the nearest enemy.",
+    orig: "Arcane Arrows and Arcane Bomb shoot 1 extra arrow. Arcane Glyphs create an extra outer ring of glyphs. On activation, you and all your existing minions gain the following passive: At the start of your turn, shoot an arcane arrow towards the nearest enemy." },
+  { id: 25001, school: "FIRE", name: "Fire Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. All your explosive fire spells have a 50% larger explosion radius.",
+    orig: "Phoenix becomes immortal. All your explosive fire spells have a 50% larger explosion radius." },
+  { id: 25002, school: "ICE", name: "Ice Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. You can't be frozen any more. Ice Ring becomes a targetable spell and Comet turns into Mini Comet.",
+    orig: "Gain immunity to being frozen. Ice Ring becomes a targetable spell. Ice Golem spawns a Frost Imp on death. Convert Comet into Mini Comet." },
+  { id: 25003, school: "ROCK", name: "Rock Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Permanent Stone Skin: every hit you take deals 2 less damage. Mud Ball makes more terrain.",
+    orig: "Gain permanent Stone Skin (with -2 instead of -5 damage reduction) and replace the Stone Skin spell with Rollout. Mud rock projectiles create more terrain." },
+  { id: 25004, school: "STORM", name: "Storm Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Chain Lightning bounces 8 more times and Lightning Bolt shoots 2 extra bolts.",
+    orig: "All your chain lightning projectiles bounce an extra 8 times. Lightning Bolt and Lightning Bomb shoot 2 extra bolts." },
+  { id: 25005, school: "WATER", name: "Water Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Permanent Water Skin: you walk on water instead of drowning. Water Ball and Water Jet spawn 10 extra droplets.",
+    orig: "Gain permanent Water Skin and replace the Water Skin spell with Dive. Waterball and Water Jet spawn an extra 10 droplets. Spring Shower spawns 10 extra droplets per turn. Whirlpool's height is increased." },
+  { id: 25006, school: "UNDERDARK", name: "Underdark Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Places a jar holding your soul where you stand: if you die, you come back at the jar with 50 HP (once).",
+    orig: "Place a jar containing your soul where you're standing. If you die, you will revive at the soul jar's location with 50 HP, destroying the jar in the process. The Soul Jar effect is recastable. Dark Arrows shoot 1 extra arrow. Remove the cooldown on Resurrect." },
+  { id: 25007, school: "NATURE", name: "Nature Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Acorn Bomb seeds raise a little terrain where they land.",
+    orig: "Acorns create terrain around where they spawn. Overgrowth makes entities even larger. On activation, all your existing mushrooms gain the following passive: At the start of your turn, shoot a spore ball towards the nearest enemy." },
+  { id: 25008, school: "OVERLIGHT", name: "Overlight Bonus", aim: "self", fx: "bonus", bonus: true, hpCost: 50, desc: "Costs 50 HP. Heal 5 HP at the start of every turn. Shining Bolt deals 15 more damage and Sky Ray shoots two extra half-strength rays.",
+    orig: "Heal 5 HP at the start of your turn, every turn. Add 15 damage to Shining Bolt. Light Arrows shoot 1 extra arrow. Sky Ray shoots two extra rays of light that are half as powerful as the main ray. Rising Star spawns an extra star in the first 4 turns." },
+  // spells a bonus swaps in (the original's ids): hidden from the draft
+  { id: 30033, school: "ICE", name: "Ice Ring", aim: "target", fx: "icering", hidden: true, desc: "Create a ring of ice around the target (Ice Bonus)." },
+  { id: 30034, school: "ICE", name: "Mini Comet", aim: "aerial", fx: "meteor", radius: 34, damage: 45, pierce: 1, hidden: true, desc: "A small comet from the sky: at least 45 damage on impact (Ice Bonus)." },
 ];
+
+// THE SCHOOL BOOKS - the draft screen's 12 slots per school, as in the original's spell selection (SpellSelectionState.java):
+//   slots 0-4  tier 1, free to equip (drawn on an arc on the left of the book)
+//   slots 5-9  tier 2: slot i needs slot i-5 equipped (arc on the right, opposite the spell it upgrades)
+//   slots 10-11 ultimates: need 5 spells of that book's slots 0-9 equipped (top and bottom of the book)
+//   -1 = an empty slot (a spell this remake doesn't have)
+// PROVISIONAL: the real slot order is sent by the server (REQUEST_SPELLS, op=31) and isn't in the client. These are built from
+// our spells with tier 2 = the natural upgrade of the spell below it and the ultimates = the biggest spells. Schools with fewer
+// than 5 tier-1/2 spells can't unlock an ultimate, so their big spell sits in tier 2. Replace a row with the captured order
+// (drop ids we can't cast to -1) and everything else follows.
+const BOOKS = {
+  //        tier 1: 0       1       2       3       4      | tier 2: 5      6       7       8       9      | ultimates: 10  11
+  ARCANE:    [26,     25,     20,     -1,     -1,           32,     30,     -1,     -1,     -1,           -1,     -1],   // Arcane Arrows>Arcane Orbital, Arcane Blast>Arcane Bomb, Arcane Gate
+  FIRE:      [0,      2,      1,      13,     12,           8,      4,      18,     14,     10,           5,      3],    // Fireball>Fire Arrow, Napalm>Napalm Bomb, Firebomb>Lava Bomb, Rocket Jump>Firework, Self-Immolation>Living Bomb; Meteor, Rain of Fire
+  ICE:       [60,     61,     68,     75,     -1,           73,     -1,     -1,     -1,     -1,           -1,     -1],   // Snowball>Comet, Ice Bomb, Ice Shards, Ice Ring
+  ROCK:      [50,     40,     51,     59,     -1,           -1,     54,     -1,     56,     -1,           41,     -1],   // Mud Ball, Scatter Rock>Mega Boulder, Pebble Destruction, Rock Slab>Stone Fortress; Quake
+  STORM:     [100,    107,    112,    109,    -1,           113,    -1,     -1,     -1,     -1,           111,    -1],   // Lightning Bolt>Chain Lightning, Call Lightning, Blink, Speed of Hermes; Shock Bomb
+  WATER:     [80,     89,     93,     87,     -1,           -1,     90,     -1,     -1,     -1,           -1,     -1],   // Water Ball, Clam>Rain of Clams, Water Jet, Expunge
+  UNDERDARK: [120,    132,    -1,     -1,     -1,           -1,     -1,     -1,     -1,     -1,           -1,     -1],   // Drain Shot, Necro Shot
+  NATURE:    [200,    204,    217,    -1,     -1,           -1,     -1,     -1,     -1,     -1,           -1,     -1],   // Acorn Bomb, Vine Whip, Vine Bridge
+  OVERLIGHT: [300,    310,    307,    -1,     -1,           308,    303,    -1,     -1,     -1,           -1,     -1],   // Healing Ball>Piety, Shining Bolt>Sky Ray, Protection Shield
+  PARTY:     [900,    901,    902,    903,    -1,           -1,     -1,     -1,     -1,     -1,           -1,     -1],   // the owner's add-on book (not in the original)
+};
+const BOOK_ORDER = ["ARCANE", "FIRE", "ICE", "ROCK", "STORM", "WATER", "UNDERDARK", "NATURE", "OVERLIGHT", "PARTY"];   // the original's Affinity order
+const BOOK_WIP = ["NATURE", "OVERLIGHT", "UNDERDARK"];   // the original marks these books "Work-in-Progress"
+// The Full Book Bonus is in a wizard's match book when this many spells of that school are equipped. The client never says when
+// the server offers it (it only draws the 25000-25008 spell big at the left of the spell bar), so this is our rule: the same 5 that
+// unlock a book's ultimates.
+const BONUS_NEED = 5;
+// spells a bonus replaces in the match book (the original: "replace the Stone Skin spell with Rollout", "Convert Comet into Mini Comet")
+const BONUS_SWAP = { ICE: { 75: 30033, 73: 30034 } };
+const DEFAULT_MAX_SPELLS = 10;   // spells per wizard (the server's maxSpellsSelected; a real match book held 17)

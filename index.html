@@ -11,7 +11,7 @@
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px system-ui,sans-serif; overflow:hidden; }
   #game { display:block; position:fixed; inset:0; touch-action:none; }
   .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#0b0816ee; z-index:5; padding:16px; }
-  .card { background:var(--panel); padding:24px 28px; border-radius:14px; width:min(620px,100%); max-height:94vh; overflow:auto; box-shadow:0 10px 40px #000a; }
+  .card { background:var(--panel); padding:24px 28px; border-radius:14px; width:min(680px,100%); max-height:94vh; overflow:auto; box-shadow:0 10px 40px #000a; }
   h1 { margin:0 0 4px; font-size:40px; color:var(--gold); }
   .card p { color:var(--dim); margin:4px 0 14px; }
   .row { display:flex; gap:8px; margin:6px 0; }
@@ -38,7 +38,7 @@
   .spell { min-height:42px; }
   #desc { color:var(--dim); font-size:13px; margin-top:6px; min-height:16px; }
   #help { color:var(--dim); font-size:12px; margin-left:auto; text-align:right; }
-  #toast { position:fixed; top:56px; left:50%; transform:translateX(-50%); background:#000c; padding:10px 18px; border-radius:10px; z-index:4; font-size:20px; opacity:0; transition:opacity .3s; text-align:center; max-width:92vw; pointer-events:none; }
+  #toast { position:fixed; top:56px; left:50%; transform:translateX(-50%); background:#000c; padding:10px 18px; border-radius:10px; z-index:9; font-size:20px; opacity:0; transition:opacity .3s; text-align:center; max-width:92vw; pointer-events:none; }
   #toast small { font-size:15px; color:#ffd9f0; }
   #toast.show { opacity:1; }
   .pv { width:40px; height:40px; border-radius:50%; object-fit:cover; object-position:50% 20%; flex:none; }
@@ -70,6 +70,97 @@
   body.guest:not(.myturn) #spells, body.guest:not(.myturn) #schools, body.guest:not(.myturn) #desc { display:none; }
   #waitNote { display:none; color:var(--dim); font-size:14px; }
   body.guest:not(.myturn) #waitNote { display:block; }
+  /* setup rows: name, looks, the spell-book button */
+  .wrow { flex-wrap:wrap; align-items:center; }
+  .wrow input { flex:1 1 120px; min-width:0; }
+  .wrow .pic { max-width:130px; }
+  .wrow .bk { min-width:118px; padding:9px 10px; font-size:13px; }
+  .wrow .bk.ok { background:#1f3a2a; color:#9dffbf; }
+  .wrow .bk.phone { background:#1f2a3a; color:#9dd3ff; opacity:1; cursor:default; }
+  .wrow .x { padding:9px 13px; }
+  .row.wrap { flex-wrap:wrap; align-items:center; }
+  #readyNote { color:var(--dim); font-size:13px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .spell.bonus { border-color:#ffcf4a77; background:#3a2c14; }
+  .spell.bonus .sicon { border-radius:8px; }
+  /* the draft screen (the original's spell selection): book tabs, the open book, the info box and the equipped grid */
+  #draft { padding:0; align-items:flex-start; overflow:auto; background:var(--bg); z-index:6; }
+  .dcard { width:min(1120px,100%); margin:0 auto; padding:12px 16px 18px; display:grid; gap:10px 14px; align-content:start;
+    --bk: min(calc(100vh - 176px), 50vw, 600px); grid-template-columns:var(--bk) minmax(0,1fr); grid-template-areas:"head head" "tabs tabs" "book side"; }
+  .dhead { grid-area:head; display:flex; align-items:center; gap:10px; min-width:0; }
+  .dwho { display:flex; flex-direction:column; min-width:0; flex:1; line-height:1.25; }
+  .dwho b { font-size:20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dwho span { color:var(--dim); font-size:14px; } .dwho span b { font-size:14px; color:var(--fg); }
+  .dwho span b.full { color:#6bff9a; } .dwho span b.bad { color:#ff6b6b; }
+  #dNote { color:var(--dim); font-size:12px; white-space:normal; }
+  #dNote:empty { display:none; }
+  .dbtns { display:flex; gap:8px; flex:none; }
+  .dbtns button { min-height:46px; touch-action:manipulation; }
+  #dReady { min-width:104px; } #dReady.on { background:#6bff9a; color:#0d2a17; }
+  #dClose { font-size:22px; padding:0 14px; }
+  #dTabs { grid-area:tabs; display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; scrollbar-width:thin; }
+  .dtab { position:relative; flex:none; width:72px; padding:4px 2px 3px; background:#1f1838; border:2px solid transparent; border-radius:10px; color:var(--fg); font-weight:600; font-size:11px; display:flex; flex-direction:column; align-items:center; touch-action:manipulation; }
+  .dtab img { width:46px; height:46px; object-fit:contain; pointer-events:none; }
+  .dtab.on { border-color:var(--c); background:#2c2448; }
+  .dtab i { position:absolute; top:2px; right:3px; font-style:normal; background:var(--c); color:#120e22; border-radius:9px; padding:0 5px; font-size:11px; font-weight:800; }
+  #dBook { grid-area:book; position:relative; width:var(--bk); height:var(--bk); border-radius:50%; background:radial-gradient(closest-side, #ffffff10, #ffffff06 82%, transparent 83%); }
+  .dlinks { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .dcover { position:absolute; left:50%; top:50%; width:42%; height:42%; transform:translate(-50%,-50%); padding:0; background:none; border-radius:50%; touch-action:manipulation; }
+  .dcover img { width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 6px 14px #000a); pointer-events:none; }
+  .dcover .bb { position:absolute; left:50%; bottom:-2%; transform:translateX(-50%); white-space:nowrap; font-size:12px; padding:2px 9px; border-radius:10px; background:#120e22e6; color:var(--dim); font-weight:700; }
+  .dcover .bb.on { color:#221a00; background:var(--gold); }
+  .dcover.sel img { filter:drop-shadow(0 0 12px var(--gold)); }
+  .dtitle { position:absolute; left:0; top:0; font-weight:800; font-size:18px; pointer-events:none; line-height:1.15; }
+  .dtitle small { color:var(--dim); font-weight:600; font-size:13px; }
+  .dtitle em { display:block; font-size:11px; font-style:normal; color:#ffb47f; font-weight:600; }
+  .dslot { position:absolute; width:15%; height:15%; transform:translate(-50%,-50%); padding:0; border-radius:50%; background:#120e22; border:3px solid #3a2f5c; touch-action:manipulation; }
+  .dslot.ult { width:18%; height:18%; border-color:#6a5a2a; }
+  .dslot .si { width:100%; height:100%; border-radius:50%; display:block; pointer-events:none; }
+  .dslot.eq { border-color:var(--c); box-shadow:0 0 0 2px var(--c), 0 0 16px var(--c); }
+  .dslot.lock .si { filter:grayscale(1) brightness(.5); }
+  .dslot .lk { position:absolute; left:50%; top:50%; width:64%; transform:translate(-50%,-50%); animation:sway 2.6s ease-in-out infinite; pointer-events:none; }
+  .dslot.sel { outline:3px solid #fff; outline-offset:3px; }
+  .dslot.empty { border-style:dashed; opacity:.3; background:none; }
+  .dslot.shake { animation:shake .45s; }
+  @keyframes sway { 0%,100% { transform:translate(-50%,-50%) rotate(-16deg); } 50% { transform:translate(-50%,-50%) rotate(16deg); } }
+  @keyframes shake { 0%,100% { margin-left:0; } 20%,60% { margin-left:-6px; } 40%,80% { margin-left:6px; } }
+  .dside { grid-area:side; min-width:0; display:flex; flex-direction:column; gap:8px; }
+  #dMsg { min-height:20px; color:var(--gold); font-weight:700; font-size:14px; }
+  #dInfo { display:flex; gap:10px; align-items:flex-start; background:var(--panel); border-radius:12px; padding:10px; min-height:104px; }
+  #dInfo .ic { width:54px; height:54px; border-radius:50%; flex:none; }
+  #dInfo > div { flex:1; min-width:0; } #dInfo small { color:var(--dim); }
+  #dInfo p { margin:3px 0; font-size:13px; } #dInfo .meta { color:var(--dim); font-size:12px; }
+  #dInfo .req { color:#ff7b7b; font-weight:700; } #dInfo .ok { color:#6bff9a; font-weight:700; } #dInfo .hint { color:var(--dim); font-size:13px; }
+  .dgo { flex:none; align-self:center; min-width:100px; min-height:48px; touch-action:manipulation; }
+  .dgo.rm { background:#5a1f2a; color:#ffd9de; }
+  .dgo:disabled { background:#2c2448; color:var(--dim); opacity:1; }
+  #dEqHead { font-weight:800; color:var(--gold); } #dEqHead span { color:var(--fg); }
+  #dEquip { display:grid; grid-template-columns:repeat(8, minmax(0, 56px)); gap:7px; }
+  .deq { aspect-ratio:1; width:100%; padding:0; border-radius:50%; background:#120e22; border:3px solid var(--c, #3a2f5c); touch-action:manipulation; }
+  .deq img { width:100%; height:100%; border-radius:50%; display:block; pointer-events:none; }
+  .deq.empty { border:2px dashed #3a2f5c; background:none; }
+  .deq.over { border-color:#ff6b6b; opacity:.65; }
+  #dChange { align-self:flex-start; }
+  @media (orientation: portrait), (max-width: 600px) {
+    .dcard { --bk: min(calc(100vw - 32px), 52vh, 600px); grid-template-columns:minmax(0,1fr); grid-template-areas:"head" "tabs" "book" "side"; }
+    .dhead { flex-wrap:wrap; }
+    .dbtns { width:100%; } .dbtns button { flex:1; padding:10px 6px; }
+    #dClose { flex:0 0 52px; }
+    .dtab { width:60px; } .dtab img { width:38px; height:38px; }
+    #dBook { justify-self:center; }
+    #dEquip { grid-template-columns:repeat(auto-fill, minmax(42px, 1fr)); }
+    #dInfo { min-height:0; }
+  }
+  @media (orientation: landscape) and (max-height: 520px) {
+    .dcard { --bk: min(calc(100vh - 74px), 46vw); padding:8px 12px; gap:6px 10px; grid-template-columns:64px var(--bk) minmax(0,1fr); grid-template-areas:"head head head" "tabs book side"; }
+    #dTabs { flex-direction:column; overflow-y:auto; max-height:var(--bk); padding:0; }
+    .dhead .pv { width:34px; height:34px; } .dwho b { font-size:16px; } #dNote { display:none; }
+    .dbtns button { min-height:44px; padding:8px 12px; }
+    .dtab { width:60px; } .dtab img { width:34px; height:34px; } .dtab span { font-size:10px; }
+    #dInfo { min-height:0; padding:8px; } #dInfo .ic { width:40px; height:40px; } #dInfo p { font-size:12px; }
+    #dEquip { grid-template-columns:repeat(8, minmax(0, 44px)); gap:5px; }
+    .dgo { min-width:84px; }
+  }
   @media (max-height: 520px), (max-width: 700px) {
     #help { display:none; }
     #hud { padding:4px 8px 6px; }
@@ -109,12 +200,17 @@
 <div class="overlay" id="setup">
   <div class="card">
     <h1>Wizard Party</h1>
-    <p>A shared-screen wizard war. Add 2 to 8 wizards, pass the mouse each turn, last wizard standing wins.</p>
+    <p>A wizard war for 2 to 16. Everyone drafts a spell book from the school books (on their phone or here), then it's turns until one wizard is left standing.</p>
     <div id="names"></div>
-    <div class="row" style="margin-top:12px;align-items:center">
+    <div class="row wrap" style="margin-top:12px">
       <button class="ghost" id="add">+ wizard</button>
-      <select id="map"><option value="hills|grass">Castle hills</option><option value="islands|grass">Sky islands</option><option value="hills|desert">Desert</option><option value="islands|canyon">Canyon</option><option value="hills|dark">Dark forest</option></select>
+      <select id="map" aria-label="Map"><option value="hills|grass">Castle hills</option><option value="islands|grass">Sky islands</option><option value="hills|desert">Desert</option><option value="islands|canyon">Canyon</option><option value="hills|dark">Dark forest</option></select>
+      <select id="maxSpells" aria-label="Spells per wizard" title="How many spells each wizard equips"></select>
       <button class="ghost" id="forgeBtn">Spell Forge</button>
+    </div>
+    <div class="row wrap" style="margin-top:8px">
+      <button class="ghost" id="randAll">Random spells for the rest</button>
+      <span id="readyNote"></span>
       <button id="start" style="margin-left:auto">Start the war</button>
     </div>
     <div class="row" style="margin-top:10px;align-items:center;flex-wrap:wrap">
@@ -149,6 +245,25 @@
     <p id="joinHint">Connecting to the room...</p>
     <div id="joinList"></div>
     <div class="st">Connecting...</div>
+  </div>
+</div>
+
+<div class="overlay" id="draft" style="display:none">
+  <div class="dcard">
+    <div class="dhead">
+      <img id="dPic" class="pv" alt="">
+      <div class="dwho"><b id="dName"></b><span id="dCount"></span><span id="dNote"></span></div>
+      <div class="dbtns"><button class="ghost" id="dRandom">Random</button><button class="ghost" id="dClear">Clear</button><button id="dReady">Ready</button><button class="ghost" id="dClose" aria-label="Close the spell book" hidden>×</button></div>
+    </div>
+    <div id="dTabs"></div>
+    <div id="dBook"></div>
+    <div class="dside">
+      <div id="dMsg" aria-live="polite"></div>
+      <div id="dInfo"></div>
+      <div id="dEqHead"></div>
+      <div id="dEquip"></div>
+      <button class="ghost" id="dChange" hidden>Change wizard</button>
+    </div>
   </div>
 </div>
 
