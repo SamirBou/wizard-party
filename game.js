@@ -962,7 +962,7 @@
     if (rowEls().length >= MAX_WIZARDS) return;
     const r = document.createElement("div"); r.className = "row wrow";
     const used = rowEls().map(rowLook);
-    const guess = look !== undefined ? look : ((LOOKS.find(p => v && p.name.toLowerCase() === String(v).toLowerCase()) || LOOKS.find(p => !used.includes(p.id)) || {}).id || "");
+    const guess = look !== undefined ? look : ((LOOKS.find(p => v && p.name.toLowerCase() === String(v).toLowerCase()) || LOOKS.find(p => !used.includes(p.id)) || LOOKS[used.length % Math.max(1, LOOKS.length)] || {}).id || "");   // looks repeat once all are used
     r.innerHTML = '<img class="pv" alt=""><input placeholder="Wizard name" maxlength="16" aria-label="Wizard name"><select class="pic" aria-label="Looks">' + LOOKS.map(p => '<option value="' + p.id + '">' + esc(p.name) + "</option>").join("") + '<option value="">plain wizard</option></select><button class="ghost bk"></button><button class="ghost x" aria-label="Remove this wizard">×</button>';
     const inp = r.querySelector("input"), sel = r.querySelector(".pic"), pv = r.querySelector(".pv");
     inp.value = v || ""; sel.value = LOOKS.some(p => p.id === guess) ? guess : "";
@@ -1073,6 +1073,12 @@
     NET.on("g", m => {
       if (!m || typeof m.cid !== "string") return;
       if (m.k === "hello") { sendLobby(false); if (phase !== "setup") sendFull(); return; }
+      if (m.k === "claim" && m.i === -1 && phase === "setup") {   // 2026-10-16: a phone joins as a NEW wizard (more players than rows)
+        const rs = rowEls(); if (rs.length >= MAX_WIZARDS || rs.some(x => x.dataset.cid === m.cid)) return sendLobby(false);
+        addName(String(m.name || "").replace(/[<>]/g, "").trim().slice(0, 16) || "Wizard " + (rs.length + 1));
+        const r = rowEls()[rowEls().length - 1]; if (r) { r.dataset.cid = m.cid; r._ready = false; }
+        return rowsChanged();
+      }
       if (m.k === "claim") {
         const i = m.i | 0;
         if (phase === "setup") {
@@ -1143,6 +1149,13 @@
       list.appendChild(b);
     });
     const mineIdx = Object.keys(cl).find(k => cl[k] === NET.cid);
+    if (!m.started && mineIdx === undefined && (m.rows || []).filter(r => r.name).length < 16) {   // 2026-10-16: no free wizard? add yourself
+      const f = document.createElement("div"); f.className = "jnew";
+      f.innerHTML = '<input maxlength="16" placeholder="Your name" aria-label="Your name"><button>Join as a new wizard</button>';
+      const inp = f.querySelector("input"); try { inp.value = localStorage.getItem("wp_name") || ""; } catch (e) {}
+      f.querySelector("button").onclick = () => { const nm = inp.value.trim(); try { localStorage.setItem("wp_name", nm); } catch (e) {} pickList = false; NET.pub("g", { k: "claim", cid: NET.cid, i: -1, name: nm }, { qos: 1 }); };
+      list.appendChild(f);
+    }
     document.getElementById("joinHint").textContent = m.started ? (mineIdx !== undefined ? "Game on. Loading the battlefield..." : "Game in progress. Pick a free wizard to take over.") : mineIdx !== undefined ? "You're in. Waiting for the host to start." : "Pick your wizard.";
     if (m.started && mineIdx !== undefined && phase === "setup") NET.pub("g", { k: "hello", cid: NET.cid }, { qos: 1 });
     // before the match a phone with a wizard builds that wizard's spell book here
