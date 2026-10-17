@@ -3,6 +3,15 @@
 (() => {
   "use strict";
   const W = 1600, H = 900, SEA = H - 34;
+  // ---------- aiming physics, from the real Wizards' server (physics_real/FINDINGS.md) ----------
+  // real: g = 800 px/s^2 on a 4000 px map, no drag, no wind, v = 17.1 px/s per charge point, charge +75/s, 30 s turns.
+  // Ours keeps its own gravity and map; speed is scaled so range/map-width matches (full meter = 0.91 map widths).
+  const SHOT_G = 0.25;            // px/frame^2 for shots (real-time-scaled equivalent would be 0.089 with POWER_SPEED 11.3)
+  const POWER_RATE = 0.0125;      // meter fraction per frame = 75 charge/s at 60 fps (the real client's rate)
+  const POWER_SPEED = 19.1;       // px/frame at power 1 (charge 100); speed = POWER_SPEED * power, no floor
+  const POWER_CAP = 2.5;          // sanity stop only (charge 250, a 3.3 s hold); the real client has no cap at all
+  const WIND_MAX = 0;             // the real game has no wind; the old value was 0.085
+  const TURN_SECONDS = 30;        // the real turn timer
   const COLORS = ["#ff5d5d", "#5db7ff", "#7dff6a", "#ffcf4a", "#d07bff", "#ff9a3d", "#4fffe0", "#ff6fd0", "#c8ff3d", "#ff3d6e", "#3d7bff", "#ffe6a0", "#a7a0ff", "#ffb0d8", "#5fd6a0", "#e8e8e8"];
   const cv = document.getElementById("game"), ctx = cv.getContext("2d");
   const terr = document.createElement("canvas"); terr.width = W; terr.height = H;
@@ -450,7 +459,7 @@
   let shake = 0, finishing = false;
   function startTurn() {
     const w = cur();
-    wind = (Math.random() - 0.5) * 0.17; castsLeft = 1; power = 0; charging = false; finishing = false; turnTimer = 45 * 60;
+    wind = (Math.random() - 0.5) * 2 * WIND_MAX; castsLeft = 1; power = 0; charging = false; finishing = false; turnTimer = TURN_SECONDS * 60;
     for (const b of bombs) if (b.owner === w) b.turns--;
     if (w.burn > 0) { w.burn--; hurt(w, 5); }
     if (w.bonus === "OVERLIGHT") healW(w, 5);                 // Overlight Bonus: +5 HP every turn
@@ -487,7 +496,7 @@
     const rl = rule(s); if (rl.cd) w.cd[s.id] = rl.cd + 1; if (s.id in w.uses) w.uses[s.id]--;
     castsLeft--; phase = "cast"; w.casting = 45; lastCast = w.name + ": " + s.name;
     const o = { x: w.x + Math.cos(w.angle) * 22, y: w.y - 30 + Math.sin(w.angle) * 22, angle: w.angle, tx: target ? target.x : mouse.x, ty: target ? target.y : mouse.y };
-    const sp = s.aim === "charge" ? 5 + power * 17 : (s.speed || 13);
+    const sp = s.aim === "charge" ? POWER_SPEED * power : (s.speed || 13);
     o.vx = Math.cos(w.angle) * sp; o.vy = Math.sin(w.angle) * sp;
     sfx("cast");
     banner(w.name + " casts <b>" + s.name + "</b>" + (s.joke ? "<br><small>" + s.joke + "</small>" : ""));
@@ -505,7 +514,7 @@
       if (keys.ArrowRight || keys.d || keys.x || touchWalk > 0) walk(w, 1);
       if (keys.ArrowUp || keys.w) w.angle -= 0.03 * w.face;
       if (keys.ArrowDown || keys.s) w.angle += 0.03 * w.face;
-      if (charging) power = Math.min(1, power + 0.014);
+      if (charging) power = Math.min(POWER_CAP, power + POWER_RATE);
       if (--turnTimer <= 0) { banner(w.name + " ran out of time"); castsLeft = 0; phase = "cast"; done(); }
     }
     for (const t of timers) if (--t.t < 0 && !t.ran) { t.ran = true; t.run(); }
@@ -540,7 +549,7 @@
   }
   function stepShot(sh) {
     sh.t++;
-    sh.vy += 0.25 * sh.grav; if (sh.wind) sh.vx += wind;
+    sh.vy += SHOT_G * sh.grav; if (sh.wind) sh.vx += wind;
     const steps = Math.ceil(Math.hypot(sh.vx, sh.vy) / 4);
     for (let i = 0; i < steps && !sh.dead; i++) {
       sh.x += sh.vx / steps; sh.y += sh.vy / steps;
@@ -636,8 +645,8 @@
     // wind and timer stay fixed on screen whatever the zoom
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const cx = innerWidth / 2;
-    ctx.fillStyle = "#fff"; ctx.font = "14px system-ui"; ctx.textAlign = "center"; ctx.fillText("wind", cx, 20);
-    ctx.fillStyle = wind > 0 ? "#7fd4ff" : "#ffb47f"; ctx.fillRect(cx, 27, wind * 1400, 6); ctx.textAlign = "start";
+    if (WIND_MAX > 0) { ctx.fillStyle = "#fff"; ctx.font = "14px system-ui"; ctx.textAlign = "center"; ctx.fillText("wind", cx, 20);
+    ctx.fillStyle = wind > 0 ? "#7fd4ff" : "#ffb47f"; ctx.fillRect(cx, 27, wind * 1400, 6); ctx.textAlign = "start"; }
     if (phase === "aim" && cur()) { ctx.fillStyle = "#ffffffcc"; ctx.font = "14px system-ui"; ctx.fillText("time " + Math.ceil(turnTimer / 60) + "s" + (castsLeft > 1 ? "   casts left: " + castsLeft : ""), 12, 20); }
   }
   function drawRig(w, active) {
@@ -657,7 +666,7 @@
       const [i, px, py] = RIG[k]; ctx.save(); ctx.translate(px, py); if (rot[k]) ctx.rotate(rot[k]);
       ctx.drawImage(im, 256 * i, 0, 256, 256, -px, -py, 1024, 1024);
       if (k === "staff" && (active && armed || w.casting > 0)) {   // the staff's orb glows in the school's colour, brighter as it charges
-        const col = SCHOOLS[spell.school] || "#ffcf4a", tx = 535 - px, ty = 92 - py, rr = 70 + 120 * (charging ? power : 0) + Math.sin(tick / 6) * 12;
+        const col = SCHOOLS[spell.school] || "#ffcf4a", tx = 535 - px, ty = 92 - py, rr = 70 + 120 * (charging ? Math.min(1, power) : 0) + Math.sin(tick / 6) * 12;
         const g = ctx.createRadialGradient(tx, ty, 0, tx, ty, rr); g.addColorStop(0, "#ffffffee"); g.addColorStop(0.25, col); g.addColorStop(1, col + "00");
         ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(tx, ty, rr, 0, 7); ctx.fill(); ctx.globalCompositeOperation = "source-over";
       }
@@ -690,7 +699,9 @@
           const back = art("ui_charge_meter_back"), fg = art("ui_charge_meter");
           ctx.save(); ctx.translate(ax * 30, -30 + ay * 30); ctx.rotate(a);
           if (ok(back)) ctx.drawImage(back, 0, -9, 74, 18); else { ctx.fillStyle = "#0008"; ctx.fillRect(0, -6, 74, 12); }
-          if (ok(fg)) { const fw = fg.naturalWidth * power; ctx.drawImage(fg, 0, 0, fw, fg.naturalHeight, 0, -9, 74 * power, 18); } else { ctx.fillStyle = "#ff6a1a"; ctx.fillRect(0, -6, 74 * power, 12); }
+          const pf = Math.min(1, power);
+          if (ok(fg)) { const nw = fg.naturalWidth, nh = fg.naturalHeight; if (pf > 0) ctx.drawImage(fg, 0, 0, Math.max(1, nw * pf), nh, 0, -9, 74 * pf, 18); if (power > 1) ctx.drawImage(fg, nw - 1, 0, 1, nh, 74, -9, 74 * (power - 1), 18); }
+          else { ctx.fillStyle = "#ff6a1a"; ctx.fillRect(0, -6, 74 * power, 12); }
           ctx.restore();
         }
       }
@@ -702,9 +713,17 @@
     ctx.font = "bold 17px system-ui"; ctx.strokeStyle = "#fffc"; ctx.strokeText(Math.max(0, w.hp), w.x, w.y + 35); ctx.fillStyle = w.hp > 40 ? "#9b0d0d" : "#e01010"; ctx.fillText(Math.max(0, w.hp), w.x, w.y + 35);
     ctx.textAlign = "start";
   }
-  function loop() {
-    if (mode === "guest") guestStep(); else step();
-    if (mode === "host" && phase !== "setup") sendSnap();
+  // 2026-10-16: fixed 60 steps a second - one step per screen refresh ran the whole game twice as fast on 120/144 Hz phones and
+  // monitors (charging, flight, turn time); drawing still happens every refresh
+  let lastT = 0, acc = 0; const DT = 1000 / 60;
+  function loop(t) {
+    t = typeof t === "number" ? t : performance.now();
+    if (!lastT) lastT = t;
+    acc += Math.min(250, t - lastT); lastT = t;
+    let n = 0;
+    while (acc >= DT && n < 5) { if (mode === "guest") guestStep(); else step(); acc -= DT; n++; }
+    if (n === 5) acc = 0;   // a stalled tab does not fast-forward
+    if (n && mode === "host" && phase !== "setup") sendSnap();
     draw(); requestAnimationFrame(loop);
   }
 
@@ -1077,7 +1096,7 @@
         const w = cur(); if (!w || w.cid !== m.cid || phase !== "aim") return;
         if (typeof m.angle === "number") { w.angle = m.angle; w.face = Math.cos(m.angle) >= 0 ? 1 : -1; }
         const s2 = BOOK.find(x => x.id === m.sp); if (s2) { spell = s2; school = s2.school; }
-        if (m.a === "cast") { power = Math.max(0, Math.min(1, +m.power || 0)); cast({ x: +m.tx || 0, y: +m.ty || 0 }); }
+        if (m.a === "cast") { power = Math.max(0, Math.min(POWER_CAP, +m.power || 0)); cast({ x: +m.tx || 0, y: +m.ty || 0 }); }
         if (m.a === "jump") doJump(m.kind === "high" ? "high" : "far");
         if (m.a === "end") doEnd();
       }
@@ -1183,12 +1202,12 @@
       const walkDir = (keys.ArrowLeft || keys.a || keys.z || touchWalk < 0) ? -1 : (keys.ArrowRight || keys.d || keys.x || touchWalk > 0) ? 1 : 0;
       if (walkDir && walkDir !== (Math.cos(myAngle) >= 0 ? 1 : -1)) myAngle = Math.PI - myAngle;
       w.angle = myAngle; w.face = Math.cos(myAngle) >= 0 ? 1 : -1;
-      if (charging) power = Math.min(1, power + 0.014);
+      if (charging) power = Math.min(POWER_CAP, power + POWER_RATE);
       const now = performance.now();
       if (now - lastCtl > 66) { lastCtl = now; NET.pub("g", { k: "ctl", cid: NET.cid, walk: walkDir, angle: Math.round(myAngle * 1000) / 1000, sp: spell.id }); }
     }
     for (const z of wizards) if (z.alive && z.air) { z.vy = Math.min(14, z.vy + 0.32); z.x += z.vx; z.y += z.vy; }
-    for (const o of shots) { o.vy += 0.25 * (o.grav ?? 1); o.x += o.vx; o.y += o.vy; }
+    for (const o of shots) { o.vy += SHOT_G * (o.grav ?? 1); o.x += o.vx; o.y += o.vy; }
     for (const sh of shots) if (tick % 2 === 0) sparks.push({ x: sh.x - sh.vx * 0.5 + (Math.random() - 0.5) * 4, y: sh.y - sh.vy * 0.5 + (Math.random() - 0.5) * 4, vx: (Math.random() - 0.5) * 0.6, vy: -0.4 - Math.random() * 0.6, life: 14 + Math.random() * 10, c: sh.color, trail: 1 });
     for (const sp of sparks) { sp.vy += sp.trail ? 0.02 : 0.2; sp.x += sp.vx; sp.y += sp.vy; sp.life--; }
     sparks = sparks.filter(s => s.life > 0);
